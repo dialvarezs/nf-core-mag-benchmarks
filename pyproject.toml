@@ -8,4 +8,5 @@ dependencies = [
     "notebook>=7.6.1",
     "plotnine>=0.15.7",
     "polars>=1.43.0",
+    "pyarrow>=25.0.0",
 ]
