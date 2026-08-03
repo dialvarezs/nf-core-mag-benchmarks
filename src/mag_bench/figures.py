@@ -324,7 +324,7 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
             + p9.facet_wrap("metric")
             + p9.coord_flip()
             + p9.labs(x=row_label, y="")
-            + theme_mag(height=10)
+            + theme_mag(height=8)
         )
         if not legend:
             plot = plot + p9.theme(legend_position="none")
@@ -435,7 +435,7 @@ def rank_by_best_resource(canonical_trace: pl.DataFrame, columns: list[str], top
     )
 
 
-def fig_top_processes(canonical_trace: pl.DataFrame, top_n: int = 12):
+def fig_top_processes(canonical_trace: pl.DataFrame, top_n: int = 15):
     """Plot the top processes across runtime, memory, and disk use."""
     metrics = _labels("realtime_h", "peak_rss_gb", "workdir_gb")
     ranked = rank_by_best_resource(canonical_trace, list(metrics), top_n)
