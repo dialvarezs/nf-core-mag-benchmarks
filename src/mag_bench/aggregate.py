@@ -1,19 +1,4 @@
-"""Turn the per-task trace into the tables the figures are drawn from.
-
-Two things have to happen before any number is comparable across the four
-runs:
-
-**Run attribution.** Each dataset was processed twice -- once assembling
-short/hybrid/long reads (``*_hybrid``) and once re-assembling the polished
-long reads (``*_polish``). The second run repeats most of the workflow, so
-summing all four runs would double-count. Every stage is therefore taken
-from the hybrid run, except those that exist *only* in the polish run.
-
-**Per-sample normalisation.** The two datasets differ in size (maghini has
-10 samples, zymo has 1), so raw totals say more about the dataset than
-about the pipeline. Stage totals are divided by the number of samples:
-"what one sample costs to push through this stage".
-"""
+"""Aggregate task traces into figure-ready tables."""
 
 from __future__ import annotations
 
@@ -25,12 +10,7 @@ from .stages import ASSEMBLERS, BINNERS, STAGE_ORDER, TAG_OF_ASSEMBLER
 
 
 def polish_only_stages(trace: pl.DataFrame) -> list[str]:
-    """Stages that appear in the polish run and nowhere else.
-
-    Derived rather than listed: the rule *is* "whatever the hybrid run did
-    not do", so computing it means a future polish-only stage cannot be
-    silently dropped from the totals.
-    """
+    """Return stages unique to polish runs."""
     seen = trace.group_by("assembly_mode").agg(stages=pl.col("stage").unique())
     by_mode = dict(zip(seen["assembly_mode"], seen["stages"]))
     return sorted(set(by_mode.get("polish", [])) - set(by_mode.get("hybrid", [])))
@@ -45,10 +25,7 @@ def canonical(trace: pl.DataFrame) -> pl.DataFrame:
 
 
 def stage_totals(canonical_trace: pl.DataFrame, samples: pl.DataFrame) -> pl.DataFrame:
-    """Per-sample compute of each stage.
-
-    Takes the already-attributed frame from :func:`canonical`.
-    """
+    """Aggregate stage metrics per sample."""
     totals = ["cpu_hours", "wall_hours", "written_gb", "workdir_gb"]
     return (
         canonical_trace.group_by("dataset", "stage")
@@ -71,33 +48,30 @@ def stage_totals(canonical_trace: pl.DataFrame, samples: pl.DataFrame) -> pl.Dat
     )
 
 
-#: Stages measured from one dataset only, because the other's number does
-#: not describe the pipeline a user would run today.
+def storage_per_sample(canonical_trace: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate storage by dataset, stage, and biological sample."""
+    return (
+        canonical_trace.filter(pl.col("granularity") != "once per run")
+        .group_by("dataset", "stage", "sample")
+        .agg(
+            written_gb=pl.col("written_gb").sum(),
+            workdir_gb=pl.col("workdir_gb").sum(),
+        )
+        .with_columns(stage=pl.col("stage").cast(pl.Enum(STAGE_ORDER)))
+    )
+
+
+#: Dataset overrides for stages with non-comparable runs.
 STAGE_SOURCE = {
-    # maghini never ran Prokka, so its annotation cost is Prodigal alone
+    # maghini did not run Prokka.
     "Annotation (Prodigal/Prokka)": "zymo",
-    # the zymo runs predate the removal of `.transpose()` in
-    # binning_refinement, which submitted one DAS Tool contig2bin job per bin
-    # instead of one per binner; maghini ran the batched version now in dev
+    # zymo used the older per-bin DAS Tool implementation.
     "Bin refinement (DAS Tool)": "maghini",
 }
 
 
-def stage_budget(totals: pl.DataFrame) -> pl.DataFrame:
-    """One figure per stage per sample, pooled over the datasets that ran it.
-
-    Derived from :func:`stage_totals` rather than re-aggregating the trace,
-    so "sum core-hours per stage, divide by sample count" is defined once.
-
-    Pooling happens on the totals, not by averaging the two datasets'
-    per-sample figures: maghini contributes 10 samples and zymo 1, so an
-    average of the two would weight the mock community tenfold. Stages that
-    only one dataset ran are divided by that dataset's sample count.
-
-    ``low``/``high`` carry the per-sample figure each dataset gave on its
-    own, so the single number can be reported without hiding that Binning
-    differs threefold between them.
-    """
+def stage_budget(totals: pl.DataFrame, metric: str = "cpu_hours") -> pl.DataFrame:
+    """Pool per-sample stage metrics across eligible datasets."""
     unknown = set(STAGE_SOURCE) - set(totals["stage"].cast(pl.String))
     if unknown:
         raise KeyError(f"STAGE_SOURCE names stages that do not exist: {sorted(unknown)}")
@@ -114,33 +88,27 @@ def stage_budget(totals: pl.DataFrame) -> pl.DataFrame:
             datasets=pl.col("dataset").sort().str.join("+"),
             n_datasets=pl.len(),
             n_samples=pl.col("n_samples").sum(),
-            cpu_hours=pl.col("cpu_hours_total").sum(),
+            metric_total=pl.col(f"{metric}_total").sum(),
             n_tasks=pl.col("n_tasks").sum(),
-            low=pl.col("cpu_hours_per_sample").min(),
-            high=pl.col("cpu_hours_per_sample").max(),
+            low=pl.col(f"{metric}_per_sample").min(),
+            high=pl.col(f"{metric}_per_sample").max(),
             jobs_low=pl.col("jobs_one_dataset").min(),
             jobs_high=pl.col("jobs_one_dataset").max(),
         )
         .with_columns(
-            core_hours_per_sample=pl.col("cpu_hours") / pl.col("n_samples"),
+            value_per_sample=pl.col("metric_total") / pl.col("n_samples"),
             jobs_per_sample=pl.col("n_tasks") / pl.col("n_samples"),
-            # read off the result, not off STAGE_SOURCE: GUNC and GTDB-Tk are
-            # also single-dataset, simply because only zymo ran them
             single_dataset=pl.col("n_datasets") == 1,
         )
         .with_columns(
-            pct=100 * pl.col("core_hours_per_sample") / pl.col("core_hours_per_sample").sum()
+            pct=100 * pl.col("value_per_sample") / pl.col("value_per_sample").sum()
         )
-        .sort("core_hours_per_sample", descending=True)
+        .sort("value_per_sample", descending=True)
     )
 
 
 def tool_tasks(canonical_trace: pl.DataFrame) -> pl.DataFrame:
-    """One row per task of an assembler or binner, for the footprint figures.
-
-    Each row is one assembly (or one assembly x binner combination), since
-    the caller has already applied the run attribution.
-    """
+    """Return assembler and binner tasks for footprint figures."""
     tools = ASSEMBLERS + BINNERS
     return (
         canonical_trace.filter(pl.col("tool").is_in(tools))
@@ -165,18 +133,12 @@ def load_assembly_stats(data_dir: str | Path = "../data") -> pl.DataFrame:
         assembly_mode="experiment",
         sample="sample",
         tag_assembler="assembler",
-        n_contigs=pl.col("# contigs (>= 0 bp)"),
+        assembly_length=pl.col("Total length"),
     )
 
 
 def with_assembly_stats(trace: pl.DataFrame, stats: pl.DataFrame) -> pl.DataFrame:
-    """Attach assembly size to every task that can be traced back to one assembly.
-
-    Assembler tasks are tagged with the sample only, so the assembler has
-    to come from the process name; binner tasks carry both in the tag.
-    Tasks that belong to no single assembly (read preprocessing, reporting)
-    keep null stats and drop out of the scaling figures.
-    """
+    """Attach assembly size to traceable assembler and binner tasks."""
     keyed = trace.with_columns(
         tag_assembler=pl.coalesce(
             pl.col("tag_assembler"),
@@ -189,13 +151,47 @@ def with_assembly_stats(trace: pl.DataFrame, stats: pl.DataFrame) -> pl.DataFram
         stats, on=["dataset", "assembly_mode", "sample", "tag_assembler"], how="left"
     )
 
-    # The scaling captions quote a per-panel n, so a tool silently losing
-    # its stats must not pass unnoticed.
+    # Fail if a plotted tool cannot be matched to assembly statistics.
     orphaned = (
-        joined.filter(pl.col("tool").is_not_null() & pl.col("n_contigs").is_null())["tool"]
+        joined.filter(pl.col("tool").is_not_null() & pl.col("assembly_length").is_null())["tool"]
         .unique()
         .to_list()
     )
     if orphaned:
         raise ValueError(f"no assembly stats matched for: {sorted(orphaned)}")
     return joined
+
+
+#: Sequencing yield from the published dataset tables, in Gbp.
+READ_YIELD_GBP = {
+    ("zymo", "zymo_fecal"): {"sr": 15.60, "lr": 11.08},
+    ("maghini", "D01"): {"sr": 9.44, "lr": 6.98},
+    ("maghini", "D02"): {"sr": 6.89, "lr": 10.50},
+    ("maghini", "D03"): {"sr": 15.81, "lr": 3.82},
+    ("maghini", "D04"): {"sr": 18.96, "lr": 9.68},
+    ("maghini", "D05"): {"sr": 12.01, "lr": 13.31},
+    ("maghini", "D06"): {"sr": 14.26, "lr": 13.67},
+    ("maghini", "D07"): {"sr": 31.69, "lr": 6.71},
+    ("maghini", "D08"): {"sr": 10.15, "lr": 12.31},
+    ("maghini", "D09"): {"sr": 9.26, "lr": 9.24},
+    ("maghini", "D10"): {"sr": 9.76, "lr": 4.12},
+}
+
+
+def with_read_yield(tasks_with_stats: pl.DataFrame) -> pl.DataFrame:
+    """Attach the sequencing input consumed by each assembler stage."""
+    yields = pl.DataFrame(
+        [
+            {"dataset": dataset, "sample": sample, "sr_gbp": gbp["sr"], "lr_gbp": gbp["lr"]}
+            for (dataset, sample), gbp in READ_YIELD_GBP.items()
+        ]
+    )
+    return tasks_with_stats.join(yields, on=["dataset", "sample"], how="left").with_columns(
+        input_gbp=pl.when(pl.col("stage") == "Short-read assembly")
+        .then(pl.col("sr_gbp"))
+        .when(pl.col("stage") == "Long-read assembly")
+        .then(pl.col("lr_gbp"))
+        .when(pl.col("stage") == "Hybrid assembly")
+        .then(pl.col("sr_gbp") + pl.col("lr_gbp"))
+        .otherwise(None)
+    )

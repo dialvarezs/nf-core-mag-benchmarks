@@ -1,23 +1,10 @@
-"""Group Nextflow processes into the pipeline stages used in the figures.
-
-A trace row is one *task*, and the number of tasks per stage varies by
-orders of magnitude: an assembler runs once per sample, while Prokka runs
-once per bin (>10 000 tasks here). Aggregating by stage is what makes the
-runs comparable, so :data:`PROCESSES` is the backbone of every figure.
-
-Unlike the CPU allocations, which are recorded in the run outputs, this
-mapping is editorial: nothing in the pipeline config knows that QUAST-on-
-assemblies and QUAST-on-bins belong at opposite ends of the workflow, or
-that seqkit is a size filter rather than a QC step. It is maintained by
-hand on purpose, and an unmapped process raises rather than falling into
-a catch-all, so a pipeline bump surfaces as a review moment.
-"""
+"""Map Nextflow processes to analysis stages and tools."""
 
 from __future__ import annotations
 
 import polars as pl
 
-# Display order, coarse-to-fine along the pipeline.
+# Pipeline display order.
 STAGE_ORDER = [
     "Short-read preprocessing",
     "Long-read preprocessing",
@@ -39,9 +26,7 @@ STAGE_ORDER = [
     "Reporting",
 ]
 
-#: Granularity = what one task of a process corresponds to. It drives the
-#: point labels ("points = individual assemblies") and explains why stage
-#: totals are dominated by processes that run once per bin.
+#: Units represented by individual tasks.
 GRANULARITY_ORDER = [
     "per sample",
     "per assembly",
@@ -50,8 +35,7 @@ GRANULARITY_ORDER = [
     "once per run",
 ]
 
-#: process -> (stage, granularity). Verified against the `include` statements
-#: and call sites of nf-core/mag; the non-obvious calls are commented.
+#: Process-to-stage and task-granularity mapping.
 PROCESSES: dict[str, tuple[str, str]] = {
     "FASTQC_RAW": ("Short-read preprocessing", "per sample"),
     "FASTP": ("Short-read preprocessing", "per sample"),
@@ -66,15 +50,13 @@ PROCESSES: dict[str, tuple[str, str]] = {
     "METASPADES": ("Short-read assembly", "per sample"),
     "GUNZIP_SHORTREAD_ASSEMBLIES": ("Short-read assembly", "per sample"),
     "METASPADESHYBRID": ("Hybrid assembly", "per sample"),
-    # CAT_FASTQ alias: pools the long reads that feed metaSPAdes-hybrid
+    # CAT_FASTQ alias for reads passed to metaSPAdes-hybrid.
     "POOL_LONG_READS": ("Hybrid assembly", "per sample"),
     "FLYE": ("Long-read assembly", "per sample"),
     "METAMDBG_ASM": ("Long-read assembly", "per sample"),
     "GUNZIP_LONGREAD_ASSEMBLIES": ("Long-read assembly", "per sample"),
     "PYPOLCA_RUN": ("Assembly polishing (pypolca)", "per sample"),
-    # QUAST is called twice in the pipeline, on assemblies and on bins; the
-    # two calls sit at opposite ends of the workflow and differ by ~7x in
-    # task count, so they are kept apart.
+    # Assembly-level QUAST; bin-level QUAST is QUAST_BINS.
     "QUAST": ("Assembly QC (QUAST)", "per assembly"),
     "ALE": ("Assembly QC (ALE)", "per assembly"),
     "BOWTIE2_ASSEMBLY_BUILD": ("Read mapping + depth", "per assembly"),
@@ -101,8 +83,7 @@ PROCESSES: dict[str, tuple[str, str]] = {
     "METABINNER_BINS": ("Binning", "per assembly x binner"),
     "COMEBIN_RUNCOMEBIN": ("Binning", "per assembly x binner"),
     "SPLIT_FASTA": ("Binning", "per assembly x binner"),
-    # not a QC step: seqkit only measures each bin so the --bin_min_size /
-    # --bin_max_size filter can be applied
+    # Used for bin-size filtering, not QC.
     "SEQKIT_STATS": ("Binning", "per assembly x binner"),
     "RENAME_PREDASTOOL": ("Bin refinement (DAS Tool)", "per assembly x binner"),
     "DASTOOL_FASTATOCONTIG2BIN": ("Bin refinement (DAS Tool)", "per bin"),
@@ -127,9 +108,7 @@ PROCESSES: dict[str, tuple[str, str]] = {
 STAGE_OF = {process: stage for process, (stage, _) in PROCESSES.items()}
 GRANULARITY_OF = {process: grain for process, (_, grain) in PROCESSES.items()}
 
-#: process -> (assembler token as it appears in Nextflow task tags, display
-#: name). One entry per tool, so the roster, the tag vocabulary and the
-#: figure labels cannot drift apart.
+#: Process-to-tag-token and display-name mapping.
 ASSEMBLER_TOOLS = {
     "MEGAHIT": ("MEGAHIT", "MEGAHIT\n(short-read)"),
     "METASPADES": ("SPAdes", "metaSPAdes\n(short-read)"),
@@ -149,17 +128,12 @@ BINNER_TOOLS = {
 TOOL_NAMES = {p: name for p, (_, name) in (ASSEMBLER_TOOLS | BINNER_TOOLS).items()}
 ASSEMBLERS = [name for _, name in ASSEMBLER_TOOLS.values()]
 BINNERS = [name for _, name in BINNER_TOOLS.values()]
-#: process -> tag token, used to line assembler tasks up with QUAST stats.
+#: Process-to-tag token for matching QUAST statistics.
 TAG_OF_ASSEMBLER = {p: tag for p, (tag, _) in ASSEMBLER_TOOLS.items()}
 
 
 def annotate(trace: pl.DataFrame) -> pl.DataFrame:
-    """Add stage / granularity / display-name columns to a parsed trace.
-
-    An unmapped process raises here rather than landing in a catch-all
-    bucket, so a new pipeline release fails on load instead of quietly
-    reshaping a figure.
-    """
+    """Add stage, granularity, and tool labels to a trace."""
     unmapped = set(trace["process"].unique()) - set(PROCESSES)
     if unmapped:
         raise KeyError(f"processes missing from stages.PROCESSES: {sorted(unmapped)}")
@@ -171,20 +145,11 @@ def annotate(trace: pl.DataFrame) -> pl.DataFrame:
 
 
 def parse_tag(trace: pl.DataFrame) -> pl.DataFrame:
-    """Split the Nextflow task tag into assembler and sample.
-
-    Tags are positional and vary by process, e.g. ``D01`` (assembler),
-    ``FLYE-D01`` (binner), ``FLYE-MetaBAT2-unclassified-unrefined-D01``
-    (bin QC). Matching known tokens is more robust than splitting on "-",
-    because sample names themselves contain hyphens in other datasets.
-    Longest token first, so ``SPAdesHybrid`` is not shadowed by ``SPAdes``.
-    """
+    """Extract assembler and sample identifiers from task tags."""
     tokens = sorted(set(TAG_OF_ASSEMBLER.values()), key=len, reverse=True)
     return trace.with_columns(
         tag_assembler=pl.col("tag").str.extract(rf"^({'|'.join(tokens)})-"),
-        # The sample is always the last hyphen-separated token, but it picks
-        # up decorations: ".<bin number>" on per-bin tasks and "_run<n>_raw"
-        # on the short-read preprocessing tasks (one row per sequencing run).
+        # Remove per-bin and sequencing-run suffixes.
         sample=(
             pl.col("tag")
             .str.split("-")

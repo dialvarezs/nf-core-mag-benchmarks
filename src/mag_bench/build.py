@@ -1,8 +1,4 @@
-"""Build every supplementary figure and write it to disk.
-
-Run as ``uv run python -m mag_bench.build`` from the project root, or call
-:func:`prepare` from a notebook to get the same frames the figures use.
-"""
+"""Build and save the supplementary figures."""
 
 from __future__ import annotations
 
@@ -17,21 +13,18 @@ from .aggregate import (
     load_assembly_stats,
     stage_budget,
     stage_totals,
+    storage_per_sample,
     tool_tasks,
     with_assembly_stats,
+    with_read_yield,
 )
 from .stages import annotate, parse_tag
 from .trace import load_traces, sample_counts
 
 
 def prepare(data_dir: str | Path = "data") -> dict[str, pl.DataFrame]:
-    """Parse the traces once and derive every frame the figures need.
-
-    The notebook and the command line both go through here, so the two
-    cannot drift apart.
-    """
-    # the sample count is read off the preprocessing tags, so it is taken
-    # before the failures are dropped
+    """Prepare all data frames used by the figures."""
+    # Failed preprocessing tasks are still needed to count samples.
     raw = parse_tag(annotate(load_traces(data_dir)))
     samples = sample_counts(raw)
     succeeded = raw.filter(pl.col("status") != "FAILED")
@@ -42,8 +35,10 @@ def prepare(data_dir: str | Path = "data") -> dict[str, pl.DataFrame]:
         "trace": kept,
         "totals": totals,
         "budget": stage_budget(totals),
+        "storage_budget": stage_budget(totals, metric="workdir_gb"),
+        "storage": storage_per_sample(kept),
         "tasks": tasks,
-        "scaling": with_assembly_stats(tasks, load_assembly_stats(data_dir)),
+        "scaling": with_read_yield(with_assembly_stats(tasks, load_assembly_stats(data_dir))),
     }
 
 
@@ -51,12 +46,11 @@ def build_all(data_dir: str | Path = "data") -> dict[str, object]:
     frames = prepare(data_dir)
     return {
         "S1_stage_compute": fg.fig_stage_compute(frames["budget"], frames["trace"]),
-        "S2_assembler_footprint": fg.fig_assembler_footprint(frames["tasks"]),
-        "S3_binner_footprint": fg.fig_binner_footprint(frames["tasks"]),
-        "S4_storage": fg.fig_storage(frames["totals"]),
+        "S2_storage": fg.fig_storage(frames["budget"], frames["storage"], frames["storage_budget"]),
+        "S3_tool_footprint": fg.fig_tool_footprint(frames["tasks"]),
+        "S4_top_processes": fg.fig_top_processes(frames["trace"]),
         "S5_scaling_assemblers": fg.fig_scaling_assemblers(frames["scaling"]),
         "S6_scaling_binners": fg.fig_scaling_binners(frames["scaling"]),
-        "S7_top_processes": fg.fig_top_processes(frames["trace"]),
     }
 
 
@@ -76,8 +70,7 @@ def save_all(
 
 
 if __name__ == "__main__":
-    # Composed figures ask matplotlib for a canvas as they are assembled,
-    # which picks up an interactive backend when a display is present.
+    # Use a non-interactive backend for command-line rendering.
     import matplotlib
 
     matplotlib.use("Agg")
