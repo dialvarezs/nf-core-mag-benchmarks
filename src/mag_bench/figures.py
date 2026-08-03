@@ -2,13 +2,90 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import plotnine as p9
 import polars as pl
+from plotnine.composition import Beside
 
 from .stages import ASSEMBLERS, BINNERS, GRANULARITY_ORDER, STAGE_ORDER
 
 #: Minimum observations required for a boxplot.
 MIN_N_FOR_BOX = 8
+MAX_JITTER_POINTS_PER_GROUP = 500
+JITTER_SEED = 0
+STAGE_JITTER_SIZE = 0.9
+STAGE_JITTER_ALPHA = 0.35
+
+
+@dataclass(repr=False)
+class _WeightedBeside(Beside):
+    """Place plots side by side with explicit relative widths."""
+
+    width_ratios: tuple[float, ...]
+
+    def _create_gridspec(self, figure, nest_into):
+        from plotnine._mpl.gridspec import p9GridSpec
+
+        self.gridspec = p9GridSpec(
+            self.nrow,
+            self.ncol,
+            figure,
+            width_ratios=self.width_ratios,
+            nest_into=nest_into,
+        )
+
+    def draw(self, *, show: bool = False):
+        from contextlib import nullcontext
+        from warnings import warn
+
+        from plotnine._mpl.layout_manager import PlotnineCompositionLayoutEngine
+        from plotnine._mpl.layout_manager._layout_tree import LayoutTree
+        from plotnine._mpl.layout_manager._spaces import LayoutSpaces
+        from plotnine.exceptions import PlotnineWarning
+
+        class WeightedLayoutEngine(PlotnineCompositionLayoutEngine):
+            def execute(self, figure):
+                renderer = figure._get_renderer()
+                lookup_spaces = {}
+                with getattr(renderer, "_draw_disabled", nullcontext)():
+                    for plotspec in self.composition.plotspecs:
+                        lookup_spaces[plotspec.plot] = LayoutSpaces(plotspec.plot)
+
+                tree = LayoutTree.create(self.composition, lookup_spaces)
+                tree.align_axis_titles()
+                tree.align()
+                plot_widths = tree.plot_widths
+                non_panel_widths = [
+                    plot_width - panel_width
+                    for plot_width, panel_width in zip(plot_widths, tree.panel_widths)
+                ]
+                panel_unit = (sum(plot_widths) - sum(non_panel_widths)) / sum(self.composition.width_ratios)
+                widths = [
+                    margin + panel_unit * ratio
+                    for margin, ratio in zip(non_panel_widths, self.composition.width_ratios)
+                ]
+                self.composition.gridspec.set_width_ratios(widths)
+
+                for plot, spaces in lookup_spaces.items():
+                    params = spaces.get_gridspec_params()
+                    if not params.valid:
+                        warn(
+                            "The figure is too small to contain all plots.",
+                            PlotnineWarning,
+                            stacklevel=2,
+                        )
+                        break
+                    plot.facet._panels_gridspec.layout(params)
+                    spaces.items._adjust_positions(spaces)
+
+        figure = super().draw(show=False)
+        figure.set_layout_engine(WeightedLayoutEngine(self))
+        figure.canvas.draw()
+        if show:
+            figure.show()
+        return figure
+
 
 DATASET_COLOURS = {"maghini": "#1F78B4", "zymo": "#E8A33D"}
 DATASET_LABELS = {"maghini": "maghini (human gut, 10 samples)", "zymo": "zymo (mock, 1 sample)"}
@@ -99,6 +176,18 @@ def _big_groups(df: pl.DataFrame, group_cols: list[str]) -> pl.DataFrame:
     return df.group_by(group_cols).len().filter(pl.col("len") >= MIN_N_FOR_BOX).select(group_cols)
 
 
+def _sample_for_jitter(
+    df: pl.DataFrame,
+    group_cols: list[str],
+    max_points: int = MAX_JITTER_POINTS_PER_GROUP,
+    seed: int = JITTER_SEED,
+) -> pl.DataFrame:
+    """Sample points within visual groups for compact vector output."""
+    return df.group_by(group_cols, maintain_order=True).map_groups(
+        lambda group: group.sample(n=min(group.height, max_points), seed=seed)
+    )
+
+
 def to_long(df: pl.DataFrame, metrics: dict[str, str], id_vars: list[str]) -> pl.DataFrame:
     """Melt metrics, preserve panel order, and remove invalid log values."""
     return (
@@ -179,6 +268,7 @@ def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
         stage_label=pl.col("stage").replace_strict(label_of),
     )
     big = _big_groups(per_job, ["stage_label"])
+    jitter = _sample_for_jitter(per_job, ["stage_label"])
 
     left = (
         p9.ggplot(per_job, p9.aes("stage_label", "cpu_hours"))
@@ -190,7 +280,15 @@ def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
             colour="#4D4D4D",
             width=0.55,
         )
-        + p9.geom_jitter(p9.aes(colour="dataset"), size=0.9, alpha=0.35, width=0.2, height=0, random_state=0)
+        + p9.geom_jitter(
+            data=jitter,
+            mapping=p9.aes(colour="dataset"),
+            size=STAGE_JITTER_SIZE,
+            alpha=STAGE_JITTER_ALPHA,
+            width=0.2,
+            height=0,
+            random_state=JITTER_SEED,
+        )
         + p9.scale_x_discrete(limits=stages)
         + _log_y()
         + _dataset_scale()
@@ -215,10 +313,14 @@ def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
         high="high",
         single_dataset="single_dataset",
     )
-    right = _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels) | _summary_bar_panel(
-        total_rows, stages, TOTAL_PANEL, si_labels
+    return _WeightedBeside(
+        [
+            left,
+            _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels),
+            _summary_bar_panel(total_rows, stages, TOTAL_PANEL, si_labels),
+        ],
+        width_ratios=(4, 1, 1),
     )
-    return left | right
 
 
 def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.DataFrame) -> p9.ggplot:
@@ -234,6 +336,7 @@ def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.
 
     def distribution(metric_label: str, *, show_axis: bool) -> p9.ggplot:
         data = long.filter(pl.col("metric") == metric_label)
+        jitter = _sample_for_jitter(data, ["stage"])
         plot = (
             p9.ggplot(data, p9.aes("stage", "value"))
             + p9.geom_boxplot(
@@ -245,7 +348,13 @@ def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.
                 width=0.55,
             )
             + p9.geom_jitter(
-                p9.aes(colour="dataset"), size=1.5, alpha=0.75, width=0.18, height=0, random_state=0
+                data=jitter,
+                mapping=p9.aes(colour="dataset"),
+                size=STAGE_JITTER_SIZE,
+                alpha=STAGE_JITTER_ALPHA,
+                width=0.18,
+                height=0,
+                random_state=JITTER_SEED,
             )
             + p9.scale_x_discrete(limits=stages)
             + p9.scale_y_log10(labels=gb_labels)
@@ -305,6 +414,7 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
         group: str, tools: list[str], metric: str, *, row_label: str, show_strip: bool, legend: bool
     ) -> p9.ggplot:
         data = long.filter((pl.col("group") == group) & (pl.col("metric") == metric))
+        jitter = _sample_for_jitter(data, ["tool"])
         plot = (
             p9.ggplot(data, p9.aes("tool", "value"))
             + p9.geom_boxplot(
@@ -316,7 +426,13 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
                 width=0.55,
             )
             + p9.geom_jitter(
-                p9.aes(colour="dataset"), size=1.5, alpha=0.75, width=0.18, height=0, random_state=0
+                data=jitter,
+                mapping=p9.aes(colour="dataset"),
+                size=1.5,
+                alpha=0.75,
+                width=0.18,
+                height=0,
+                random_state=JITTER_SEED,
             )
             + p9.scale_x_discrete(limits=tools)
             + _log_y()
