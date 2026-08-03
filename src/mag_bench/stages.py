@@ -151,10 +151,6 @@ def parse_tag(trace: pl.DataFrame) -> pl.DataFrame:
         tag_assembler=pl.col("tag").str.extract(rf"^({'|'.join(tokens)})-"),
         # Remove per-bin and sequencing-run suffixes.
         sample=(
-            pl.col("tag")
-            .str.split("-")
-            .list.last()
-            .str.replace(r"\..*$", "")
-            .str.replace(r"_run\d+.*$", "")
+            pl.col("tag").str.split("-").list.last().str.replace(r"\..*$", "").str.replace(r"_run\d+.*$", "")
         ),
     )

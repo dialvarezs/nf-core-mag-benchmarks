@@ -12,10 +12,7 @@ _MISSING = ["-", "", "NA"]
 
 #: Extract the required fields without parsing the report's JavaScript payload.
 _REPORT_PAYLOAD = re.compile(r"window\.data\s*=\s*(\{.*?\});", re.S)
-_REPORT_FIELDS = {
-    name: re.compile(rf'"{name}":"(\d+)"')
-    for name in ("task_id", "cpus", "attempt")
-}
+_REPORT_FIELDS = {name: re.compile(rf'"{name}":"(\d+)"') for name in ("task_id", "cpus", "attempt")}
 
 
 def _duration_s(column: str) -> pl.Expr:
@@ -96,15 +93,12 @@ def load_traces(data_dir: str | Path = "../data") -> pl.DataFrame:
     """Load all runs under ``data_dir`` into one table."""
     data_dir = Path(data_dir)
     runs = [p for p in sorted(data_dir.iterdir()) if p.is_dir()]
-    trace = _fill_missing_reservations(
-        pl.concat([load_run(p) for p in runs], how="diagonal_relaxed")
-    )
+    trace = _fill_missing_reservations(pl.concat([load_run(p) for p in runs], how="diagonal_relaxed"))
 
     return trace.with_columns(
         realtime_h=pl.col("realtime_s") / 3600,
         # CPU time consumed, not reserved capacity.
         cpu_hours=pl.col("cpu_pct") / 100 * pl.col("realtime_s") / 3600,
-        cpu_efficiency=pl.col("cpu_pct") / (100 * pl.col("cpus")),
         peak_rss_gb=pl.col("peak_rss_b") / 2**30,
         written_gb=pl.col("wchar_b") / 2**30,
         workdir_gb=pl.col("disk_bytes") / 2**30,
@@ -125,6 +119,8 @@ def _fill_missing_reservations(trace: pl.DataFrame) -> pl.DataFrame:
     if unresolved:
         raise ValueError(f"no CPU allocation recorded for: {sorted(unresolved)}")
     return filled.drop("default_cpus")
+
+
 def sample_counts(trace: pl.DataFrame) -> pl.DataFrame:
     """Count biological samples from preprocessing task tags."""
     return (

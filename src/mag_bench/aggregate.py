@@ -26,22 +26,17 @@ def canonical(trace: pl.DataFrame) -> pl.DataFrame:
 
 def stage_totals(canonical_trace: pl.DataFrame, samples: pl.DataFrame) -> pl.DataFrame:
     """Aggregate stage metrics per sample."""
-    totals = ["cpu_hours", "wall_hours", "written_gb", "workdir_gb"]
     return (
         canonical_trace.group_by("dataset", "stage")
         .agg(
             n_tasks=pl.len(),
             cpu_hours_total=pl.col("cpu_hours").sum(),
-            wall_hours_total=pl.col("realtime_h").sum(),
-            written_gb_total=pl.col("written_gb").sum(),
             workdir_gb_total=pl.col("workdir_gb").sum(),
         )
         .join(samples, on="dataset")
         .with_columns(
-            *[
-                (pl.col(f"{name}_total") / pl.col("n_samples")).alias(f"{name}_per_sample")
-                for name in totals
-            ],
+            cpu_hours_per_sample=pl.col("cpu_hours_total") / pl.col("n_samples"),
+            workdir_gb_per_sample=pl.col("workdir_gb_total") / pl.col("n_samples"),
         )
         .with_columns(stage=pl.col("stage").cast(pl.Enum(STAGE_ORDER)))
         .sort("stage", "dataset")
@@ -78,14 +73,11 @@ def stage_budget(totals: pl.DataFrame, metric: str = "cpu_hours") -> pl.DataFram
 
     chosen = totals.filter(
         pl.col("dataset")
-        == pl.col("stage")
-        .cast(pl.String)
-        .replace_strict(STAGE_SOURCE, default=pl.col("dataset"))
+        == pl.col("stage").cast(pl.String).replace_strict(STAGE_SOURCE, default=pl.col("dataset"))
     ).with_columns(jobs_one_dataset=pl.col("n_tasks") / pl.col("n_samples"))
     return (
         chosen.group_by("stage")
         .agg(
-            datasets=pl.col("dataset").sort().str.join("+"),
             n_datasets=pl.len(),
             n_samples=pl.col("n_samples").sum(),
             metric_total=pl.col(f"{metric}_total").sum(),
@@ -100,8 +92,15 @@ def stage_budget(totals: pl.DataFrame, metric: str = "cpu_hours") -> pl.DataFram
             jobs_per_sample=pl.col("n_tasks") / pl.col("n_samples"),
             single_dataset=pl.col("n_datasets") == 1,
         )
-        .with_columns(
-            pct=100 * pl.col("value_per_sample") / pl.col("value_per_sample").sum()
+        .select(
+            "stage",
+            "low",
+            "high",
+            "jobs_low",
+            "jobs_high",
+            "value_per_sample",
+            "jobs_per_sample",
+            "single_dataset",
         )
         .sort("value_per_sample", descending=True)
     )
@@ -111,7 +110,7 @@ def tool_tasks(canonical_trace: pl.DataFrame) -> pl.DataFrame:
     """Return assembler and binner tasks for footprint figures."""
     tools = ASSEMBLERS + BINNERS
     return (
-        canonical_trace.filter(pl.col("tool").is_in(tools))
+        canonical_trace.filter(pl.col("tool").is_not_null())
         .with_columns(tool=pl.col("tool").cast(pl.Enum(tools)))
         .sort("tool")
     )
@@ -142,14 +141,10 @@ def with_assembly_stats(trace: pl.DataFrame, stats: pl.DataFrame) -> pl.DataFram
     keyed = trace.with_columns(
         tag_assembler=pl.coalesce(
             pl.col("tag_assembler"),
-            pl.col("process").replace_strict(
-                TAG_OF_ASSEMBLER, default=None, return_dtype=pl.String
-            ),
+            pl.col("process").replace_strict(TAG_OF_ASSEMBLER, default=None, return_dtype=pl.String),
         )
     )
-    joined = keyed.join(
-        stats, on=["dataset", "assembly_mode", "sample", "tag_assembler"], how="left"
-    )
+    joined = keyed.join(stats, on=["dataset", "assembly_mode", "sample", "tag_assembler"], how="left")
 
     # Fail if a plotted tool cannot be matched to assembly statistics.
     orphaned = (
@@ -186,12 +181,15 @@ def with_read_yield(tasks_with_stats: pl.DataFrame) -> pl.DataFrame:
             for (dataset, sample), gbp in READ_YIELD_GBP.items()
         ]
     )
-    return tasks_with_stats.join(yields, on=["dataset", "sample"], how="left").with_columns(
-        input_gbp=pl.when(pl.col("stage") == "Short-read assembly")
-        .then(pl.col("sr_gbp"))
-        .when(pl.col("stage") == "Long-read assembly")
-        .then(pl.col("lr_gbp"))
-        .when(pl.col("stage") == "Hybrid assembly")
-        .then(pl.col("sr_gbp") + pl.col("lr_gbp"))
-        .otherwise(None)
+    return (
+        tasks_with_stats.join(yields, on=["dataset", "sample"], how="left")
+        .with_columns(
+            input_gbp=pl.when(pl.col("stage") == "Short-read assembly")
+            .then(pl.col("sr_gbp"))
+            .when(pl.col("stage") == "Long-read assembly")
+            .then(pl.col("lr_gbp"))
+            .when(pl.col("stage") == "Hybrid assembly")
+            .then(pl.col("sr_gbp") + pl.col("lr_gbp"))
+        )
+        .drop("sr_gbp", "lr_gbp")
     )

@@ -41,8 +41,7 @@ BASE_SIZE = 11
 
 def theme_mag(height: float = 7) -> p9.theme:
     """Return the shared figure theme."""
-    base_size = BASE_SIZE
-    return p9.theme_bw(base_size=base_size) + p9.theme(
+    return p9.theme_bw(base_size=BASE_SIZE) + p9.theme(
         figure_size=(FIGURE_WIDTH, height),
         legend_position="bottom",
         panel_grid_minor=p9.element_blank(),
@@ -50,16 +49,16 @@ def theme_mag(height: float = 7) -> p9.theme:
         panel_grid_major_x=p9.element_line(colour="#E6E6E6", size=0.4),
         panel_border=p9.element_rect(colour="#4D4D4D", size=0.5),
         strip_background=p9.element_rect(fill="#F0F0F0", colour="#4D4D4D", size=0.5),
-        strip_text=p9.element_text(weight="bold", size=base_size),
-        plot_title=p9.element_text(weight="bold", size=base_size + 3, ha="left"),
-        plot_subtitle=p9.element_text(size=base_size, colour="#4D4D4D", ha="left"),
-        plot_caption=p9.element_text(size=base_size - 2, colour="#4D4D4D", ha="right"),
+        strip_text=p9.element_text(weight="bold", size=BASE_SIZE),
+        plot_title=p9.element_text(weight="bold", size=BASE_SIZE + 3, ha="left"),
+        plot_subtitle=p9.element_text(size=BASE_SIZE, colour="#4D4D4D", ha="left"),
+        plot_caption=p9.element_text(size=BASE_SIZE - 2, colour="#4D4D4D", ha="right"),
         # Prevent long categorical labels from shifting titles off-canvas.
         plot_title_position="plot",
         plot_caption_position="plot",
         legend_key=p9.element_blank(),
         legend_title=p9.element_text(weight="bold"),
-        axis_title=p9.element_text(size=base_size),
+        axis_title=p9.element_text(size=BASE_SIZE),
     )
 
 
@@ -203,25 +202,29 @@ def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
     )
 
     jobs_rows = labelled.select(
-        "stage_label", value="jobs_per_sample", low="jobs_low", high="jobs_high",
+        "stage_label",
+        value="jobs_per_sample",
+        low="jobs_low",
+        high="jobs_high",
         single_dataset="single_dataset",
     )
     total_rows = labelled.select(
-        "stage_label", value="value_per_sample", low="low", high="high",
+        "stage_label",
+        value="value_per_sample",
+        low="low",
+        high="high",
         single_dataset="single_dataset",
     )
-    right = (
-        _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels)
-        | _summary_bar_panel(total_rows, stages, TOTAL_PANEL, si_labels)
+    right = _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels) | _summary_bar_panel(
+        total_rows, stages, TOTAL_PANEL, si_labels
     )
     return left | right
 
 
 def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.DataFrame) -> p9.ggplot:
     """Plot data written and retained per stage and sample."""
-    subset = storage.filter(pl.col("stage").cast(pl.String) != "Assembly QC (ALE)")
     long = to_long(
-        subset,
+        storage.filter(pl.col("stage").cast(pl.String) != "Assembly QC (ALE)"),
         {"written_gb": "Bytes written by the jobs", "workdir_gb": "Left on disk (work directory)"},
         ["dataset", "stage", "sample"],
     )
@@ -263,26 +266,32 @@ def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.
 
     in_stages = pl.col("stage").cast(pl.String).is_in(stages)
     jobs_rows = budget.filter(in_stages).select(
-        stage_label="stage", value="jobs_per_sample", low="jobs_low", high="jobs_high",
+        stage_label="stage",
+        value="jobs_per_sample",
+        low="jobs_low",
+        high="jobs_high",
         single_dataset="single_dataset",
     )
     total_disk_rows = storage_budget.filter(in_stages).select(
-        stage_label="stage", value="value_per_sample", low="low", high="high",
+        stage_label="stage",
+        value="value_per_sample",
+        low="low",
+        high="high",
         single_dataset="single_dataset",
     )
-    bars = (
-        _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels)
-        | _summary_bar_panel(total_disk_rows, stages, TOTAL_DISK_PANEL, gb_labels)
+    bars = _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels) | _summary_bar_panel(
+        total_disk_rows, stages, TOTAL_DISK_PANEL, gb_labels
     )
     return written | left_on_disk | bars
 
 
 def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
     """Plot assembler and binner resource distributions."""
-    subset = tasks.filter(pl.col("tool").is_in(ASSEMBLERS + BINNERS))
     # Exclude known retries without dropping the run that lacks attempt data.
-    first_try = subset.filter(~(pl.col("attempt") > 1).fill_null(False))
-    labelled = first_try.with_columns(
+    labelled = tasks.filter(
+        pl.col("tool").is_in(ASSEMBLERS + BINNERS),
+        ~(pl.col("attempt") > 1).fill_null(False),
+    ).with_columns(
         tool=pl.col("tool").cast(pl.String),
         group=pl.when(pl.col("tool").cast(pl.String).is_in(ASSEMBLERS))
         .then(pl.lit("Assemblers"))
@@ -352,8 +361,11 @@ def _scaling(
     scales: str,
 ) -> p9.ggplot:
     """Plot resource use against tool input size."""
-    subset = tasks_with_stats.filter(pl.col("tool").is_in(tools))
-    long = to_long(subset, _labels("peak_rss_gb", "cpu_hours"), ["dataset", "tool", x_col])
+    long = to_long(
+        tasks_with_stats.filter(pl.col("tool").is_in(tools)),
+        _labels("peak_rss_gb", "cpu_hours"),
+        ["dataset", "tool", x_col],
+    )
 
     return (
         p9.ggplot(long, p9.aes(x_col, "value", colour="dataset"))

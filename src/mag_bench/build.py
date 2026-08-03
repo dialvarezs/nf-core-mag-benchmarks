@@ -33,7 +33,6 @@ def prepare(data_dir: str | Path = "data") -> dict[str, pl.DataFrame]:
     totals = stage_totals(kept, samples)
     return {
         "trace": kept,
-        "totals": totals,
         "budget": stage_budget(totals),
         "storage_budget": stage_budget(totals, metric="workdir_gb"),
         "storage": storage_per_sample(kept),
@@ -54,9 +53,7 @@ def build_all(data_dir: str | Path = "data") -> dict[str, object]:
     }
 
 
-def save_all(
-    figs: dict[str, object], out_dir: str | Path = "figures", dpi: int = 300
-) -> list[Path]:
+def save_all(figs: dict[str, object], out_dir: str | Path = "figures", dpi: int = 300) -> list[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
