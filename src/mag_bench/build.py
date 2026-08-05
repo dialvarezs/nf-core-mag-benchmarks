@@ -31,6 +31,7 @@ def prepare(data_dir: str | Path = "data") -> dict[str, pl.DataFrame]:
     totals = stage_totals(kept, samples)
     return {
         "trace": kept,
+        "samples": samples,
         "budget": stage_budget(totals),
         "storage_budget": stage_budget(totals, metric="workdir_gb"),
         "storage": storage_per_sample(kept),
