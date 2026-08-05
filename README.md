@@ -47,6 +47,8 @@ Data published by Maghini et al. (2025) in "Illumina complete long read assay yi
 
 Each dataset was processed in a single run, with minimal changes over pipeline defaults. All assemblers (2 short-read, 2 long-read, 1 hybrid) and all binners (6) were enabled, plus polishing of the long-read assemblies, assembly QC (QUAST, ALE), bin refinement with DAS Tool, bin QC by BUSCO, CheckM2, QUAST and GUNC, annotation with Prodigal and Prokka, and taxonomic classification by GTDB-Tk and CATpack (ZymoBIOMICS only).
 
+Because `postbinning_input` is set to `both`, every post-binning step runs on the bins of each of the 6 binners and on the DAS Tool refined set: 7 bin sets per assembly, so 35 per sample across the 5 assemblies.
+
 Both runs share the parameters below, with one exception: `cat_db` was set only for the ZymoBIOMICS dataset, because of CATpack's heavy computational requirements.
 
 ```yaml
