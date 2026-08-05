@@ -461,11 +461,11 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
             metric_names[0],
             row_label="Binners",
             show_strip=False,
-            legend=True,
+            legend=False,
             unit="per job",
         )
         | panel(
-            "Binners", BINNERS, metric_names[1], row_label="", show_strip=False, legend=False, unit="per job"
+            "Binners", BINNERS, metric_names[1], row_label="", show_strip=False, legend=True, unit="per job"
         )
         | panel(
             "Binners", BINNERS, metric_names[2], row_label="", show_strip=False, legend=False, unit="per job"
@@ -537,7 +537,8 @@ def rank_by_best_resource(trace: pl.DataFrame, columns: list[str], top_n: int) -
             trace.filter(pl.col(column) > 0)
             .group_by("process")
             .agg(median=pl.col(column).median())
-            .sort("median", descending=True)
+            # Break ties on the process name, so that equal medians rank reproducibly.
+            .sort("median", "process", descending=[True, False])
             .with_row_index(f"rank_{column}", offset=1)
             .select("process", f"rank_{column}")
         )
@@ -551,7 +552,7 @@ def rank_by_best_resource(trace: pl.DataFrame, columns: list[str], top_n: int) -
     return (
         ranks.with_columns([pl.col(c).fill_null(last) for c in rank_columns])
         .with_columns(best_rank=pl.min_horizontal(rank_columns), rank_sum=pl.sum_horizontal(rank_columns))
-        .sort("best_rank", "rank_sum")
+        .sort("best_rank", "rank_sum", "process")
         .head(top_n)
     )
 
@@ -572,7 +573,7 @@ def fig_top_processes(trace: pl.DataFrame, top_n: int = 15):
         .to_list()
     )
 
-    def panel(column: str, scale, *, first: bool = False) -> p9.ggplot:
+    def panel(column: str, scale, *, first: bool = False, legend: bool = False) -> p9.ggplot:
         """Plot one resource panel."""
         plot = (
             p9.ggplot(
@@ -588,16 +589,16 @@ def fig_top_processes(trace: pl.DataFrame, top_n: int = 15):
             + p9.labs(x="", y="per job")
             + theme_mag(height=6.5)
         )
-        if first:
-            return plot
-        return plot + p9.theme(
-            axis_text_y=p9.element_blank(),
-            axis_ticks_major_y=p9.element_blank(),
-            legend_position="none",
-        )
+        if not first:
+            plot = plot + p9.theme(
+                axis_text_y=p9.element_blank(), axis_ticks_major_y=p9.element_blank()
+            )
+        if not legend:
+            plot = plot + p9.theme(legend_position="none")
+        return plot
 
     return (
         panel("realtime_h", _log_y(), first=True)
-        | panel("peak_rss_gb", _log_y())
+        | panel("peak_rss_gb", _log_y(), legend=True)
         | panel("workdir_gb", p9.scale_y_continuous(labels=si_labels))
     )
