@@ -22,6 +22,7 @@ STAGE_ORDER = [
     "Bin QC (QUAST)",
     "Bin QC (GUNC)",
     "Annotation (Prodigal/Prokka)",
+    "Taxonomic classification (CAT)",
     "Taxonomic classification (GTDB-Tk)",
     "Reporting",
 ]
@@ -99,6 +100,9 @@ PROCESSES: dict[str, tuple[str, str]] = {
     "CONCAT_GUNC_TSV": ("Bin QC (GUNC)", "once per run"),
     "PRODIGAL": ("Annotation (Prodigal/Prokka)", "per assembly"),
     "PROKKA": ("Annotation (Prodigal/Prokka)", "per bin"),
+    "CATPACK_BINS": ("Taxonomic classification (CAT)", "per assembly x binner"),
+    "CATPACK_ADDNAMES_BINS": ("Taxonomic classification (CAT)", "per assembly x binner"),
+    "CATPACK_SUMMARISE_BINS": ("Taxonomic classification (CAT)", "per assembly x binner"),
     "GTDBTK_CLASSIFYWF": ("Taxonomic classification (GTDB-Tk)", "per assembly x binner"),
     "GTDBTK_SUMMARY": ("Taxonomic classification (GTDB-Tk)", "once per run"),
     "MULTIQC": ("Reporting", "once per run"),
@@ -151,6 +155,12 @@ def parse_tag(trace: pl.DataFrame) -> pl.DataFrame:
         tag_assembler=pl.col("tag").str.extract(rf"^({'|'.join(tokens)})-"),
         # Remove per-bin and sequencing-run suffixes.
         sample=(
-            pl.col("tag").str.split("-").list.last().str.replace(r"\..*$", "").str.replace(r"_run\d+.*$", "")
+            pl.col("tag")
+            .str.split("-")
+            .list.last()
+            .str.replace(r"\..*$", "")
+            # CONCOCT and SemiBin2 number their bins with an underscore instead of a dot.
+            .str.replace(r"_\d+$", "")
+            .str.replace(r"_run\d+.*$", "")
         ),
     )

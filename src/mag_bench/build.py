@@ -9,7 +9,6 @@ import polars as pl
 
 from . import figures as fg
 from .aggregate import (
-    canonical,
     load_assembly_stats,
     stage_budget,
     stage_totals,
@@ -27,8 +26,7 @@ def prepare(data_dir: str | Path = "data") -> dict[str, pl.DataFrame]:
     # Failed preprocessing tasks are still needed to count samples.
     raw = parse_tag(annotate(load_traces(data_dir)))
     samples = sample_counts(raw)
-    succeeded = raw.filter(pl.col("status") != "FAILED")
-    kept = canonical(succeeded)
+    kept = raw.filter(pl.col("status") != "FAILED")
     tasks = tool_tasks(kept)
     totals = stage_totals(kept, samples)
     return {
@@ -45,7 +43,7 @@ def build_all(data_dir: str | Path = "data") -> dict[str, object]:
     frames = prepare(data_dir)
     return {
         "S1_stage_compute": fg.fig_stage_compute(frames["budget"], frames["trace"]),
-        "S2_storage": fg.fig_storage(frames["budget"], frames["storage"], frames["storage_budget"]),
+        "S2_storage": fg.fig_storage(frames["storage"], frames["storage_budget"]),
         "S3_tool_footprint": fg.fig_tool_footprint(frames["tasks"]),
         "S4_top_processes": fg.fig_top_processes(frames["trace"]),
         "S5_scaling_assemblers": fg.fig_scaling_assemblers(frames["scaling"]),

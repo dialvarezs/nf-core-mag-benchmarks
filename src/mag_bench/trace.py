@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import polars as pl
 
 _SIZE_UNITS = {"B": 1, "KB": 2**10, "MB": 2**20, "GB": 2**30, "TB": 2**40, "PB": 2**50}
 _MISSING = ["-", "", "NA"]
-
-#: Extract the required fields without parsing the report's JavaScript payload.
-_REPORT_PAYLOAD = re.compile(r"window\.data\s*=\s*(\{.*?\});", re.S)
-_REPORT_FIELDS = {name: re.compile(rf'"{name}":"(\d+)"') for name in ("task_id", "cpus", "attempt")}
 
 
 def _duration_s(column: str) -> pl.Expr:
@@ -41,35 +36,16 @@ def _size_bytes(column: str) -> pl.Expr:
     ).replace_strict(_SIZE_UNITS, default=None, return_dtype=pl.Float64)
 
 
-def _report_cpus(run_dir: Path) -> pl.DataFrame | None:
-    """Read per-task CPU reservations from an execution report."""
-    reports = sorted(run_dir.glob("pipeline_info/execution_report_*.html"))
-    if not reports:
-        return None
-    match = _REPORT_PAYLOAD.search(reports[0].read_text(errors="replace"))
-    if match is None:
-        return None
-    payload = match.group(1)
-    columns = {name: rx.findall(payload) for name, rx in _REPORT_FIELDS.items()}
-    if not columns["task_id"]:
-        return None
-    if len({len(values) for values in columns.values()}) != 1:
-        raise ValueError(f"{run_dir}: execution report fields do not line up")
-    return pl.DataFrame(columns).cast(pl.Int64)
-
-
 def load_run(run_dir: Path) -> pl.DataFrame:
-    """Read one run directory (e.g. ``data/maghini_hybrid``)."""
+    """Read one run directory (e.g. ``data/maghini``)."""
     traces = sorted(run_dir.glob("pipeline_info/execution_trace_*_extended.txt"))
     if len(traces) != 1:
         raise FileNotFoundError(f"{run_dir}: expected 1 extended trace, found {len(traces)}")
 
-    dataset, _, assembly_mode = run_dir.name.partition("_")
     raw = pl.read_csv(traces[0], separator="\t", infer_schema_length=None, null_values=_MISSING)
 
-    parsed = raw.with_columns(
-        dataset=pl.lit(dataset),
-        assembly_mode=pl.lit(assembly_mode),
+    return raw.with_columns(
+        dataset=pl.lit(run_dir.name),
         # Split the qualified process name and trailing task tag.
         process=pl.col("name").str.split(" (").list.get(0).str.split(":").list.last(),
         tag=pl.col("name").str.extract(r"\(([^)]*)\)$"),
@@ -79,21 +55,12 @@ def load_run(run_dir: Path) -> pl.DataFrame:
         wchar_b=_size_bytes("wchar"),
     )
 
-    reserved = _report_cpus(run_dir)
-    if reserved is None:
-        # Attempts are unknown when the report has no task payload.
-        return parsed.with_columns(
-            cpus=pl.lit(None, dtype=pl.Int64),
-            attempt=pl.lit(None, dtype=pl.Int64),
-        )
-    return parsed.join(reserved, on="task_id", how="left")
-
 
 def load_traces(data_dir: str | Path = "../data") -> pl.DataFrame:
     """Load all runs under ``data_dir`` into one table."""
     data_dir = Path(data_dir)
     runs = [p for p in sorted(data_dir.iterdir()) if p.is_dir()]
-    trace = _fill_missing_reservations(pl.concat([load_run(p) for p in runs], how="diagonal_relaxed"))
+    trace = pl.concat([load_run(p) for p in runs], how="diagonal_relaxed")
 
     return trace.with_columns(
         realtime_h=pl.col("realtime_s") / 3600,
@@ -103,22 +70,6 @@ def load_traces(data_dir: str | Path = "../data") -> pl.DataFrame:
         written_gb=pl.col("wchar_b") / 2**30,
         workdir_gb=pl.col("disk_bytes") / 2**30,
     )
-
-
-def _fill_missing_reservations(trace: pl.DataFrame) -> pl.DataFrame:
-    """Impute missing reservations from recorded first attempts."""
-    known = (
-        trace.filter(pl.col("cpus").is_not_null() & (pl.col("attempt") == 1))
-        .group_by("process")
-        .agg(default_cpus=pl.col("cpus").mode().first())
-    )
-    filled = trace.join(known, on="process", how="left").with_columns(
-        cpus=pl.coalesce("cpus", "default_cpus")
-    )
-    unresolved = filled.filter(pl.col("cpus").is_null())["process"].unique().to_list()
-    if unresolved:
-        raise ValueError(f"no CPU allocation recorded for: {sorted(unresolved)}")
-    return filled.drop("default_cpus")
 
 
 def sample_counts(trace: pl.DataFrame) -> pl.DataFrame:

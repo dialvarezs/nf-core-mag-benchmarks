@@ -9,25 +9,10 @@ import polars as pl
 from .stages import ASSEMBLERS, BINNERS, STAGE_ORDER, TAG_OF_ASSEMBLER
 
 
-def polish_only_stages(trace: pl.DataFrame) -> list[str]:
-    """Return stages unique to polish runs."""
-    seen = trace.group_by("assembly_mode").agg(stages=pl.col("stage").unique())
-    by_mode = dict(zip(seen["assembly_mode"], seen["stages"]))
-    return sorted(set(by_mode.get("polish", [])) - set(by_mode.get("hybrid", [])))
-
-
-def canonical(trace: pl.DataFrame) -> pl.DataFrame:
-    """Drop the tasks that would be double-counted across the two runs."""
-    polish_only = polish_only_stages(trace)
-    from_hybrid = (pl.col("assembly_mode") == "hybrid") & ~pl.col("stage").is_in(polish_only)
-    from_polish = (pl.col("assembly_mode") == "polish") & pl.col("stage").is_in(polish_only)
-    return trace.filter(from_hybrid | from_polish)
-
-
-def stage_totals(canonical_trace: pl.DataFrame, samples: pl.DataFrame) -> pl.DataFrame:
+def stage_totals(trace: pl.DataFrame, samples: pl.DataFrame) -> pl.DataFrame:
     """Aggregate stage metrics per sample."""
     return (
-        canonical_trace.group_by("dataset", "stage")
+        trace.group_by("dataset", "stage")
         .agg(
             n_tasks=pl.len(),
             cpu_hours_total=pl.col("cpu_hours").sum(),
@@ -43,10 +28,10 @@ def stage_totals(canonical_trace: pl.DataFrame, samples: pl.DataFrame) -> pl.Dat
     )
 
 
-def storage_per_sample(canonical_trace: pl.DataFrame) -> pl.DataFrame:
+def storage_per_sample(trace: pl.DataFrame) -> pl.DataFrame:
     """Aggregate storage by dataset, stage, and biological sample."""
     return (
-        canonical_trace.filter(pl.col("granularity") != "once per run")
+        trace.filter(pl.col("granularity") != "once per run")
         .group_by("dataset", "stage", "sample")
         .agg(
             written_gb=pl.col("written_gb").sum(),
@@ -56,27 +41,11 @@ def storage_per_sample(canonical_trace: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-#: Dataset overrides for stages with non-comparable runs.
-STAGE_SOURCE = {
-    # maghini did not run Prokka.
-    "Annotation (Prodigal/Prokka)": "zymo",
-    # zymo used the older per-bin DAS Tool implementation.
-    "Bin refinement (DAS Tool)": "maghini",
-}
-
-
 def stage_budget(totals: pl.DataFrame, metric: str = "cpu_hours") -> pl.DataFrame:
-    """Pool per-sample stage metrics across eligible datasets."""
-    unknown = set(STAGE_SOURCE) - set(totals["stage"].cast(pl.String))
-    if unknown:
-        raise KeyError(f"STAGE_SOURCE names stages that do not exist: {sorted(unknown)}")
-
-    chosen = totals.filter(
-        pl.col("dataset")
-        == pl.col("stage").cast(pl.String).replace_strict(STAGE_SOURCE, default=pl.col("dataset"))
-    ).with_columns(jobs_one_dataset=pl.col("n_tasks") / pl.col("n_samples"))
+    """Pool per-sample stage metrics across datasets."""
+    per_dataset = totals.with_columns(jobs_one_dataset=pl.col("n_tasks") / pl.col("n_samples"))
     return (
-        chosen.group_by("stage")
+        per_dataset.group_by("stage")
         .agg(
             n_datasets=pl.len(),
             n_samples=pl.col("n_samples").sum(),
@@ -106,11 +75,11 @@ def stage_budget(totals: pl.DataFrame, metric: str = "cpu_hours") -> pl.DataFram
     )
 
 
-def tool_tasks(canonical_trace: pl.DataFrame) -> pl.DataFrame:
+def tool_tasks(trace: pl.DataFrame) -> pl.DataFrame:
     """Return assembler and binner tasks for footprint figures."""
     tools = ASSEMBLERS + BINNERS
     return (
-        canonical_trace.filter(pl.col("tool").is_not_null())
+        trace.filter(pl.col("tool").is_not_null())
         .with_columns(tool=pl.col("tool").cast(pl.Enum(tools)))
         .sort("tool")
     )
@@ -129,7 +98,6 @@ def load_assembly_stats(data_dir: str | Path = "../data") -> pl.DataFrame:
     )
     return stats.select(
         dataset="dataset",
-        assembly_mode="experiment",
         sample="sample",
         tag_assembler="assembler",
         assembly_length=pl.col("Total length"),
@@ -144,7 +112,7 @@ def with_assembly_stats(trace: pl.DataFrame, stats: pl.DataFrame) -> pl.DataFram
             pl.col("process").replace_strict(TAG_OF_ASSEMBLER, default=None, return_dtype=pl.String),
         )
     )
-    joined = keyed.join(stats, on=["dataset", "assembly_mode", "sample", "tag_assembler"], how="left")
+    joined = keyed.join(stats, on=["dataset", "sample", "tag_assembler"], how="left")
 
     # Fail if a plotted tool cannot be matched to assembly statistics.
     orphaned = (

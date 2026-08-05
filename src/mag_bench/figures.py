@@ -202,10 +202,12 @@ def to_long(df: pl.DataFrame, metrics: dict[str, str], id_vars: list[str]) -> pl
 #: Fixed baseline for bars on logarithmic axes.
 BAR_BASELINE = 0.01
 
-PER_JOB_PANEL = "CPU core-hours per job"
+#: Left out of the storage figure: their footprint is negligible and compresses the axes.
+STORAGE_EXCLUDED_STAGES = ["Assembly QC (QUAST)", "Assembly QC (ALE)"]
+
+PER_JOB_PANEL = "CPU core-hours"
 JOBS_PANEL = "Jobs launched"
 TOTAL_PANEL = "Total core-hours"
-TOTAL_DISK_PANEL = "Total left on disk"
 
 
 def _summary_bar_panel(rows: pl.DataFrame, stages: list[str], panel_label: str, labels) -> p9.ggplot:
@@ -254,16 +256,21 @@ def _summary_bar_panel(rows: pl.DataFrame, stages: list[str], panel_label: str, 
     )
 
 
-def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
-    """Plot per-job and total compute use by stage."""
+def _star_single_dataset(budget: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, str]]:
+    """Mark stages observed in a single dataset and return the stage-to-label map."""
     labelled = budget.with_columns(
         stage_label=pl.col("stage")
         + pl.when(pl.col("single_dataset")).then(pl.lit(" *")).otherwise(pl.lit(""))
     )
-    label_of = dict(zip(labelled["stage"], labelled["stage_label"]))
+    return labelled, dict(zip(labelled["stage"], labelled["stage_label"]))
+
+
+def fig_stage_compute(budget: pl.DataFrame, trace: pl.DataFrame):
+    """Plot per-job and total compute use by stage."""
+    labelled, label_of = _star_single_dataset(budget)
     stages = [label_of[s] for s in reversed(STAGE_ORDER) if s in label_of]
 
-    per_job = canonical_trace.filter(pl.col("cpu_hours") > 0).with_columns(
+    per_job = trace.filter(pl.col("cpu_hours") > 0).with_columns(
         panel=pl.lit(PER_JOB_PANEL),
         stage_label=pl.col("stage").replace_strict(label_of),
     )
@@ -295,7 +302,7 @@ def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
         + p9.guides(colour=p9.guide_legend(override_aes={"size": 3, "alpha": 1}))
         + p9.facet_wrap("panel")
         + p9.coord_flip()
-        + p9.labs(x="Analysis stage", y="")
+        + p9.labs(x="Analysis stage", y="per job")
         + theme_mag()
     )
 
@@ -323,24 +330,25 @@ def fig_stage_compute(budget: pl.DataFrame, canonical_trace: pl.DataFrame):
     )
 
 
-def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.DataFrame) -> p9.ggplot:
+def fig_storage(storage: pl.DataFrame, storage_budget: pl.DataFrame):
     """Plot data written and retained per stage and sample."""
+    _, label_of = _star_single_dataset(storage_budget)
     long = to_long(
-        storage.filter(pl.col("stage").cast(pl.String) != "Assembly QC (ALE)"),
-        {"written_gb": "Bytes written by the jobs", "workdir_gb": "Left on disk (work directory)"},
+        storage.filter(~pl.col("stage").cast(pl.String).is_in(STORAGE_EXCLUDED_STAGES)),
+        {"written_gb": "Bytes written", "workdir_gb": "Left on disk (work directory)"},
         ["dataset", "stage", "sample"],
-    )
+    ).with_columns(stage_label=pl.col("stage").cast(pl.String).replace_strict(label_of))
     present = set(long["stage"].cast(pl.String))
-    stages = [s for s in reversed(STAGE_ORDER) if s in present]
-    big = _big_groups(long, ["stage", "metric"])
+    stages = [label_of[s] for s in reversed(STAGE_ORDER) if s in present]
+    big = _big_groups(long, ["stage_label", "metric"])
 
     def distribution(metric_label: str, *, show_axis: bool) -> p9.ggplot:
         data = long.filter(pl.col("metric") == metric_label)
-        jitter = _sample_for_jitter(data, ["stage"])
+        jitter = _sample_for_jitter(data, ["stage_label"])
         plot = (
-            p9.ggplot(data, p9.aes("stage", "value"))
+            p9.ggplot(data, p9.aes("stage_label", "value"))
             + p9.geom_boxplot(
-                data=data.join(big, on=["stage", "metric"], how="semi"),
+                data=data.join(big, on=["stage_label", "metric"], how="semi"),
                 outlier_alpha=0,
                 size=0.4,
                 fill="#F2F2F2",
@@ -361,7 +369,7 @@ def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.
             + p9.facet_wrap("metric")
             + _dataset_scale()
             + p9.coord_flip()
-            + p9.labs(x="Analysis stage" if show_axis else "", y="")
+            + p9.labs(x="Analysis stage" if show_axis else "", y="per sample")
             + theme_mag()
         )
         if not show_axis:
@@ -370,37 +378,14 @@ def fig_storage(budget: pl.DataFrame, storage: pl.DataFrame, storage_budget: pl.
             )
         return plot
 
-    written = distribution("Bytes written by the jobs", show_axis=True)
-    left_on_disk = distribution("Left on disk (work directory)", show_axis=False)
-
-    in_stages = pl.col("stage").cast(pl.String).is_in(stages)
-    jobs_rows = budget.filter(in_stages).select(
-        stage_label="stage",
-        value="jobs_per_sample",
-        low="jobs_low",
-        high="jobs_high",
-        single_dataset="single_dataset",
+    return distribution("Bytes written", show_axis=True) | distribution(
+        "Left on disk (work directory)", show_axis=False
     )
-    total_disk_rows = storage_budget.filter(in_stages).select(
-        stage_label="stage",
-        value="value_per_sample",
-        low="low",
-        high="high",
-        single_dataset="single_dataset",
-    )
-    bars = _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels) | _summary_bar_panel(
-        total_disk_rows, stages, TOTAL_DISK_PANEL, gb_labels
-    )
-    return written | left_on_disk | bars
 
 
 def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
     """Plot assembler and binner resource distributions."""
-    # Exclude known retries without dropping the run that lacks attempt data.
-    labelled = tasks.filter(
-        pl.col("tool").is_in(ASSEMBLERS + BINNERS),
-        ~(pl.col("attempt") > 1).fill_null(False),
-    ).with_columns(
+    labelled = tasks.filter(pl.col("tool").is_in(ASSEMBLERS + BINNERS)).with_columns(
         tool=pl.col("tool").cast(pl.String),
         group=pl.when(pl.col("tool").cast(pl.String).is_in(ASSEMBLERS))
         .then(pl.lit("Assemblers"))
@@ -411,7 +396,14 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
     big = _big_groups(long, ["tool", "metric", "dataset"])
 
     def panel(
-        group: str, tools: list[str], metric: str, *, row_label: str, show_strip: bool, legend: bool
+        group: str,
+        tools: list[str],
+        metric: str,
+        *,
+        row_label: str,
+        show_strip: bool,
+        legend: bool,
+        unit: str = "",
     ) -> p9.ggplot:
         data = long.filter((pl.col("group") == group) & (pl.col("metric") == metric))
         jitter = _sample_for_jitter(data, ["tool"])
@@ -439,7 +431,7 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
             + _dataset_scale()
             + p9.facet_wrap("metric")
             + p9.coord_flip()
-            + p9.labs(x=row_label, y="")
+            + p9.labs(x=row_label, y=unit)
             + theme_mag(height=8)
         )
         if not legend:
@@ -461,10 +453,23 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
         | panel("Assemblers", ASSEMBLERS, metric_names[1], row_label="", show_strip=True, legend=False)
         | panel("Assemblers", ASSEMBLERS, metric_names[2], row_label="", show_strip=True, legend=False)
     )
+    # Only the bottom row carries the unit, as the outermost axis of the figure.
     bottom = (
-        panel("Binners", BINNERS, metric_names[0], row_label="Binners", show_strip=False, legend=True)
-        | panel("Binners", BINNERS, metric_names[1], row_label="", show_strip=False, legend=False)
-        | panel("Binners", BINNERS, metric_names[2], row_label="", show_strip=False, legend=False)
+        panel(
+            "Binners",
+            BINNERS,
+            metric_names[0],
+            row_label="Binners",
+            show_strip=False,
+            legend=True,
+            unit="per job",
+        )
+        | panel(
+            "Binners", BINNERS, metric_names[1], row_label="", show_strip=False, legend=False, unit="per job"
+        )
+        | panel(
+            "Binners", BINNERS, metric_names[2], row_label="", show_strip=False, legend=False, unit="per job"
+        )
     )
     return top / bottom
 
@@ -524,12 +529,12 @@ def fig_scaling_binners(tasks_with_stats: pl.DataFrame) -> p9.ggplot:
     )
 
 
-def rank_by_best_resource(canonical_trace: pl.DataFrame, columns: list[str], top_n: int) -> pl.DataFrame:
+def rank_by_best_resource(trace: pl.DataFrame, columns: list[str], top_n: int) -> pl.DataFrame:
     """Rank processes by their best rank across the selected resources."""
     ranks = None
     for column in columns:
         per_metric = (
-            canonical_trace.filter(pl.col(column) > 0)
+            trace.filter(pl.col(column) > 0)
             .group_by("process")
             .agg(median=pl.col(column).median())
             .sort("median", descending=True)
@@ -542,7 +547,7 @@ def rank_by_best_resource(canonical_trace: pl.DataFrame, columns: list[str], top
 
     rank_columns = [f"rank_{column}" for column in columns]
     # Missing metrics rank last rather than first.
-    last = canonical_trace["process"].n_unique()
+    last = trace["process"].n_unique()
     return (
         ranks.with_columns([pl.col(c).fill_null(last) for c in rank_columns])
         .with_columns(best_rank=pl.min_horizontal(rank_columns), rank_sum=pl.sum_horizontal(rank_columns))
@@ -551,11 +556,11 @@ def rank_by_best_resource(canonical_trace: pl.DataFrame, columns: list[str], top
     )
 
 
-def fig_top_processes(canonical_trace: pl.DataFrame, top_n: int = 15):
+def fig_top_processes(trace: pl.DataFrame, top_n: int = 15):
     """Plot the top processes across runtime, memory, and disk use."""
     metrics = _labels("realtime_h", "peak_rss_gb", "workdir_gb")
-    ranked = rank_by_best_resource(canonical_trace, list(metrics), top_n)
-    labelled = canonical_trace.join(ranked.select("process"), on="process", how="semi").with_columns(
+    ranked = rank_by_best_resource(trace, list(metrics), top_n)
+    labelled = trace.join(ranked.select("process"), on="process", how="semi").with_columns(
         label=pl.format("{}  ({} jobs)", "process", pl.len().over("process")),
         granularity=pl.col("granularity").cast(pl.Enum(GRANULARITY_ORDER)),
     )
@@ -580,7 +585,7 @@ def fig_top_processes(canonical_trace: pl.DataFrame, top_n: int = 15):
             + p9.scale_fill_manual(values=GRANULARITY_COLOURS, name="This step runs", drop=False)
             + p9.facet_wrap("metric", nrow=1)
             + p9.coord_flip()
-            + p9.labs(x="", y="")
+            + p9.labs(x="", y="per job")
             + theme_mag(height=6.5)
         )
         if first:
