@@ -45,7 +45,9 @@ Data published by Maghini et al. (2025) in "Illumina complete long read assay yi
 
 ### Pipeline parameters
 
-Each dataset was processed in a single run, with the same parameters and mostly pipeline defaults:
+Each dataset was processed in a single run, with minimal changes over pipeline defaults. All assemblers (2 short-read, 2 long-read, 1 hybrid) and all binners (6) were enabled, plus polishing of the long-read assemblies, assembly QC (QUAST, ALE), bin refinement with DAS Tool, bin QC by BUSCO, CheckM2, QUAST and GUNC, annotation with Prodigal and Prokka, and taxonomic classification by GTDB-Tk and CATpack (ZymoBIOMICS only).
+
+Both runs share the parameters below, with one exception: `cat_db` was set only for the ZymoBIOMICS dataset, because of CATpack's heavy computational requirements.
 
 ```yaml
 input: input/samplesheet.csv
@@ -69,8 +71,6 @@ gtdb_db: input/databases/gtdb/release232/
 gunc_db: input/databases/gunc/gunc_db_progenomes2.1.dmnd
 cat_db: input/databases/catpack/20231120_CAT_gtdb/ # ZymoBIOMICS only
 ```
-
-`cat_db` is the only parameter that differs between the two runs: CATpack was set up only for the ZymoBIOMICS dataset, because of its heavy computational requirements.
 
 ### Resource overrides
 

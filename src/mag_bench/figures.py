@@ -393,7 +393,7 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
     )
     metrics = _labels("peak_rss_gb", "realtime_h", "cpu_hours")
     long = to_long(labelled, metrics, ["dataset", "tool", "group"])
-    big = _big_groups(long, ["tool", "metric", "dataset"])
+    big = _big_groups(long, ["tool", "metric"])
 
     def panel(
         group: str,
@@ -410,7 +410,7 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
         plot = (
             p9.ggplot(data, p9.aes("tool", "value"))
             + p9.geom_boxplot(
-                data=data.join(big, on=["tool", "metric", "dataset"], how="semi"),
+                data=data.join(big, on=["tool", "metric"], how="semi"),
                 outlier_alpha=0,
                 size=0.4,
                 fill="#F2F2F2",
