@@ -1,10 +1,10 @@
 # nf-core/mag benchmarking
 
-This repository contains benchmarking data for the [nf-core/mag](https://nf-co.re/mag/) pipeline. The data is used to evaluate the performance of the pipeline on different datasets and configurations and provide a reference for users to estimate the computational resources required for their own analyses.
+This repository contains benchmarking data for the [nf-core/mag](https://nf-co.re/mag/) pipeline. The benchmarks measure how the pipeline performs across datasets and configurations, and give users a reference for estimating the computational resources required for their analyses.
 
 ## Datasets
 
-Both datasets contain paired-end short reads (SR) and long reads (LR) from the same sample, to enable all possible assembly strategies (short-read only, long-read only, hybrid assembly). The datasets are summarized in the tables below.
+Both datasets contain paired-end short reads (SR) and long reads (LR) from the same sample, so that every assembly strategy is possible: short-read only, long-read only, and hybrid assembly.
 
 ### Dataset 1: ZymoBIOMICS Fecal Reference
 
@@ -76,7 +76,7 @@ cat_db: input/databases/catpack/20231120_CAT_gtdb/ # ZymoBIOMICS only
 
 ### Resource overrides
 
-Assemblers and binners all get 8 CPUs on a single socket, so that their resource use is comparable to each other. metaSPAdes gets more memory than the pipeline default to avoid out-of-memory failures, and COMEBin a longer time limit. Prokka errors are ignored, so that a failure on an individual bin does not stop the run.
+Assemblers and binners all get 8 CPUs on a single socket, so that their resource use stays comparable. metaSPAdes gets more memory than the pipeline default to avoid out-of-memory failures, and COMEBin a longer time limit. Prokka errors are ignored, so that a failure on an individual bin does not stop the run.
 
 ```groovy
 process {
@@ -116,8 +116,8 @@ The six supplementary figures of the manuscript, written to `figures/`. Compute 
 
 ### [notebooks/03_configuration_estimates.ipynb](notebooks/03_configuration_estimates.ipynb)
 
-What two minimal configurations would have cost, one short-read and one long-read, obtained by selecting from the same traces only the tasks each configuration would have launched. Reports jobs, CPU core-hours, work-directory size and peak memory per sample, both in total and broken down by stage. Runtime is deliberately absent, because wall-clock is set by the critical path and by cluster contention rather than by the sum of task times.
+What two minimal configurations would have cost, one short-read and one long-read, obtained by selecting from the same traces only the tasks each configuration would have launched. Reports jobs, CPU core-hours, work-directory size and peak memory per sample, both in total and broken down by stage. Runtime is left out on purpose: wall-clock depends on the critical path and on cluster contention, not on the sum of task times.
 
 ### [notebooks/04_process_resources.ipynb](notebooks/04_process_resources.ipynb)
 
-A lookup table of what every process costs per task: CPU time, peak memory, runtime and work-directory size, as a median and an observed range. Values are consumed resources, not the CPUs and memory reserved for a task, and the ranges pool both datasets and every assembly a process ran on. Exported to [data/process_resources.csv](data/process_resources.csv) so it can be consulted without running the notebook.
+A lookup table of what every process costs per task: CPU time, peak memory, runtime and work-directory size, as a median and an observed range. The numbers are what tasks consumed, not what the pipeline reserved for them, and the ranges pool both datasets and every assembly a process ran on. The same table lives in [data/process_resources.csv](data/process_resources.csv), for looking things up without running the notebook.
