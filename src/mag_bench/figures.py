@@ -88,7 +88,10 @@ class _WeightedBeside(Beside):
 
 
 DATASET_COLOURS = {"maghini": "#1F78B4", "zymo": "#E8A33D"}
-DATASET_LABELS = {"maghini": "maghini (human gut, 10 samples)", "zymo": "zymo (mock, 1 sample)"}
+DATASET_LABELS = {
+    "maghini": "maghini (human gut, 10 samples)",
+    "zymo": "zymo (fecal reference, 1 sample)",
+}
 GRANULARITY_COLOURS = {
     "per sample": "#8FBFE0",
     "per assembly": "#2E9E7C",
@@ -166,9 +169,9 @@ def gb_labels(breaks) -> list[str]:
     return si_labels([None if value is None else value * 1e9 for value in breaks])
 
 
-def _log_y():
+def _log_y(expand=None):
     # plotnine mutates scales when composing plots.
-    return p9.scale_y_log10(labels=si_labels)
+    return p9.scale_y_log10(labels=si_labels, expand=expand)
 
 
 def _big_groups(df: pl.DataFrame, group_cols: list[str]) -> pl.DataFrame:
@@ -474,6 +477,27 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
     return top / bottom
 
 
+def _panel_correlations(long: pl.DataFrame, x_col: str, *, free_x: bool) -> pl.DataFrame:
+    """Pearson correlation per panel, on the log-transformed values the fits use."""
+    log_value = pl.col("value").log10()
+    stats = (
+        long.group_by("metric", "tool")
+        .agg(r=pl.corr(pl.col(x_col).log10(), log_value))
+        .drop_nulls("r")
+        .with_columns(
+            label=pl.format(
+                "$r$ = {}", pl.col("r").map_elements(lambda r: f"{r:.2f}", return_dtype=pl.String)
+            )
+        )
+    )
+    # Anchor each label to the top-left corner of its own panel. facet_grid shares the y scale along
+    # a row and, unless x is free, the x scale along a column, so the anchors follow that grouping.
+    stats = stats.join(long.group_by("metric").agg(y=pl.col("value").max()), on="metric")
+    if free_x:
+        return stats.join(long.group_by("tool").agg(pl.col(x_col).min()), on="tool")
+    return stats.join(long.select(pl.col(x_col).min()), how="cross")
+
+
 def _scaling(
     tasks_with_stats: pl.DataFrame,
     tools: list[str],
@@ -487,10 +511,20 @@ def _scaling(
         _labels("peak_rss_gb", "cpu_hours"),
         ["dataset", "tool", x_col],
     )
+    correlations = _panel_correlations(long, x_col, free_x=scales == "free")
 
     return (
         p9.ggplot(long, p9.aes(x_col, "value", colour="dataset"))
         + p9.geom_point(size=1.6, alpha=0.8)
+        + p9.geom_text(
+            data=correlations,
+            mapping=p9.aes(x_col, "y", label="label"),
+            ha="left",
+            va="top",
+            size=BASE_SIZE - 1,
+            colour="#4D4D4D",
+            inherit_aes=False,
+        )
         + p9.geom_smooth(
             mapping=p9.aes(x_col, "value"),
             method="lm",
