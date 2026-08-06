@@ -106,14 +106,14 @@ process {
 
 The notebooks read the pipeline outputs under `data/` and share the code in `src/mag_bench/`.
 
-### `notebooks/01_basic_metrics.ipynb`
+### [notebooks/01_basic_metrics.ipynb](notebooks/01_basic_metrics.ipynb)
 
 Assembly and bin metrics per dataset and assembler, from the QUAST summaries and the bin summary tables: mean assembly length, contig count and N50, then the number of bins recovered and their mean length. Describes what the pipeline produced, not what it cost.
 
-### `notebooks/02_benchmarking_metrics.ipynb`
+### [notebooks/02_benchmarking_metrics.ipynb](notebooks/02_benchmarking_metrics.ipynb)
 
 The six supplementary figures of the manuscript, written to `figures/`. Compute use and storage per analysis stage, resource footprint per assembler and binner, the most resource-intensive processes, and how assemblers and binners scale with sequencing input and assembly size. Built from the extended execution traces.
 
-### `notebooks/03_configuration_estimates.ipynb`
+### [notebooks/03_configuration_estimates.ipynb](notebooks/03_configuration_estimates.ipynb)
 
 What two minimal configurations would have cost, one short-read and one long-read, obtained by selecting from the same traces only the tasks each configuration would have launched. Reports jobs, CPU core-hours, work-directory size and peak memory per sample, both in total and broken down by stage. Runtime is deliberately absent, because wall-clock is set by the critical path and by cluster contention rather than by the sum of task times.
