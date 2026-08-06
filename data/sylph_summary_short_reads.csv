@@ -1,0 +1,12 @@
+dataset,sample,n_species,n_genera,n_families,n_phyla,n_species_ge_1pct,n_species_ge_0.1pct,pct_sequence_classified,pct_unknown,shannon_H,pielou_evenness,mean_adjusted_ANI,median_adjusted_ANI,top_species,top_species_tax_abund
+zymo,zymo_fecal,651,353,87,11,20,150,83.48,16.52,5.060,0.781,98.34,98.61,Ruminiclostridium_E siraeum,5.297
+maghini,D01,337,213,55,7,26,91,93.49,6.51,4.233,0.727,98.41,98.63,Faecalibacterium prausnitzii,7.573
+maghini,D02,265,158,37,6,28,105,100.00,0.00,4.310,0.773,98.10,98.28,Phocaeicola sp019414725,5.011
+maghini,D03,339,191,50,8,19,100,94.26,5.74,3.990,0.685,98.21,98.32,Megamonas funiformis,15.469
+maghini,D04,403,210,57,8,20,156,92.19,7.81,4.710,0.785,98.13,98.25,Bifidobacterium adolescentis,7.876
+maghini,D05,280,178,42,7,25,92,91.84,8.16,4.009,0.711,98.27,98.48,Acutalibacter stercoravium,11.728
+maghini,D06,270,162,39,5,25,88,99.41,0.59,3.978,0.711,98.26,98.47,Faecalibacterium duncaniae,8.164
+maghini,D07,368,231,56,8,31,107,99.01,0.99,4.317,0.731,98.36,98.60,Roseburia rectalis,7.598
+maghini,D08,363,213,44,7,25,106,97.89,2.11,4.307,0.731,98.33,98.52,Phocaeicola dorei,7.988
+maghini,D09,301,182,43,8,31,112,91.80,8.20,4.452,0.780,98.22,98.43,Faecalibacterium duncaniae,4.890
+maghini,D10,144,87,27,6,28,82,100.00,0.00,3.894,0.784,98.37,98.59,Blautia_A wexlerae,9.100
