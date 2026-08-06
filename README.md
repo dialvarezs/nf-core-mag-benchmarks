@@ -117,3 +117,7 @@ The six supplementary figures of the manuscript, written to `figures/`. Compute 
 ### [notebooks/03_configuration_estimates.ipynb](notebooks/03_configuration_estimates.ipynb)
 
 What two minimal configurations would have cost, one short-read and one long-read, obtained by selecting from the same traces only the tasks each configuration would have launched. Reports jobs, CPU core-hours, work-directory size and peak memory per sample, both in total and broken down by stage. Runtime is deliberately absent, because wall-clock is set by the critical path and by cluster contention rather than by the sum of task times.
+
+### [notebooks/04_process_resources.ipynb](notebooks/04_process_resources.ipynb)
+
+A lookup table of what every process costs per task: CPU time, peak memory, runtime and work-directory size, as a median and an observed range. Values are consumed resources, not the CPUs and memory reserved for a task, and the ranges pool both datasets and every assembly a process ran on. Exported to [data/process_resources.csv](data/process_resources.csv) so it can be consulted without running the notebook.
