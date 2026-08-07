@@ -69,7 +69,6 @@ def save_all(
 
 
 if __name__ == "__main__":
-    # Use a non-interactive backend for command-line rendering.
     import matplotlib
 
     matplotlib.use("Agg")

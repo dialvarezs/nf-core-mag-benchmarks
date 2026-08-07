@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import polars as pl
 
-# Pipeline display order.
 STAGE_ORDER = [
     "Short-read preprocessing",
     "Long-read preprocessing",

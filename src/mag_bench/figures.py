@@ -10,7 +10,6 @@ from plotnine.composition import Beside
 
 from .stages import ASSEMBLERS, BINNERS, GRANULARITY_ORDER, STAGE_ORDER
 
-#: Minimum observations required for a boxplot.
 MIN_N_FOR_BOX = 8
 MAX_JITTER_POINTS_PER_GROUP = 500
 JITTER_SEED = 0
@@ -90,7 +89,7 @@ class _WeightedBeside(Beside):
         return figure
 
 
-DATASET_COLOURS = {"maghini": "#16877E", "zymo": "#EF8478"}
+DATASET_COLOURS = {"maghini": "#16877E", "zymo": "#D55E00"}
 DATASET_LABELS = {
     "maghini": "maghini (human gut, 10 samples)",
     "zymo": "zymo (fecal reference, 1 sample)",
@@ -103,7 +102,6 @@ GRANULARITY_COLOURS = {
     "once per run": "#B0AFAC",
 }
 
-#: Shared metric labels.
 METRIC_LABELS = {
     "peak_rss_gb": "Peak memory (GB)",
     "realtime_h": "Wall-clock time (h)",
@@ -117,7 +115,6 @@ def _labels(*columns: str) -> dict[str, str]:
     return {column: METRIC_LABELS[column] for column in columns}
 
 
-#: Shared dimensions and typography.
 FIGURE_WIDTH = 13
 BASE_SIZE = 11
 #: Shrinks the canvas, so that text reads larger once the figure is scaled to the page width.
@@ -207,7 +204,6 @@ def to_long(df: pl.DataFrame, metrics: dict[str, str], id_vars: list[str]) -> pl
     )
 
 
-#: Fixed baseline for bars on logarithmic axes.
 BAR_BASELINE = 0.01
 
 #: Left out of the storage figure: their footprint is negligible and compresses the axes.
@@ -216,6 +212,11 @@ STORAGE_EXCLUDED_STAGES = ["Assembly QC (QUAST)", "Assembly QC (ALE)"]
 PER_JOB_PANEL = "CPU core-hours"
 JOBS_PANEL = "Jobs launched"
 TOTAL_PANEL = "Total core-hours"
+
+#: Taller than the other figures, so that the per-stage densities have room.
+STAGE_FIGURE_HEIGHT = 9
+#: Narrows the kernel, so that stages spanning several decades keep their shape.
+DENSITY_ADJUST = 0.6
 
 
 def _summary_bar_panel(
@@ -261,7 +262,7 @@ def _summary_bar_panel(
         + p9.coord_flip()
         + p9.labs(x="", y="per sample", title=tag)
         # The last composed plot sets the final canvas size.
-        + theme_mag()
+        + theme_mag(height=STAGE_FIGURE_HEIGHT)
         + p9.theme(axis_text_y=p9.element_blank(), axis_ticks_major_y=p9.element_blank())
     )
 
@@ -284,37 +285,56 @@ def fig_stage_compute(budget: pl.DataFrame, trace: pl.DataFrame):
         panel=pl.lit(PER_JOB_PANEL),
         stage_label=pl.col("stage").replace_strict(label_of),
     )
-    big = _big_groups(per_job, ["stage_label"])
-    jitter = _sample_for_jitter(per_job, ["stage_label"])
+    dense_groups = _big_groups(per_job, ["stage_label", "dataset"])
+    dense = per_job.join(dense_groups, on=["stage_label", "dataset"], how="semi")
+    sparse = per_job.join(dense_groups, on=["stage_label", "dataset"], how="anti")
+
+    def half(dataset: str, style: str) -> p9.geom_violin:
+        """Draw one dataset on its own side of the stage axis."""
+        return p9.geom_violin(
+            data=dense.filter(pl.col("dataset") == dataset),
+            mapping=p9.aes(fill="dataset"),
+            # One layer per side: style="left-right" assigns sides by group parity, which flips
+            # whenever a stage has a density for one dataset only.
+            style=style,
+            scale="width",
+            adjust=DENSITY_ADJUST,
+            # Let the kernel taper instead of ending in a vertical cut.
+            trim=False,
+            width=1.0,
+            alpha=0.5,
+            # No outline: it would draw the near-zero density of the tails as a hairline.
+            size=0,
+        )
 
     left = (
         p9.ggplot(per_job, p9.aes("stage_label", "cpu_hours"))
+        + half("maghini", "left")
+        + half("zymo", "right")
         + p9.geom_boxplot(
-            data=per_job.join(big, on="stage_label", how="semi"),
+            data=per_job.join(_big_groups(per_job, ["stage_label"]), on="stage_label", how="semi"),
             outlier_alpha=0,
-            size=0.4,
-            fill="#F2F2F2",
-            colour="#4D4D4D",
-            width=0.55,
+            size=0.35,
+            fill="white",
+            colour="#3D3D3D",
+            width=0.12,
         )
-        + p9.geom_jitter(
-            data=jitter,
+        + p9.geom_point(
+            data=sparse,
             mapping=p9.aes(colour="dataset"),
-            size=STAGE_JITTER_SIZE,
-            alpha=STAGE_JITTER_ALPHA,
+            size=POINT_SIZE * 0.7,
+            alpha=0.9,
             stroke=0,
-            width=0.2,
-            height=0,
-            random_state=JITTER_SEED,
         )
         + p9.scale_x_discrete(limits=stages)
         + _log_y()
         + _dataset_scale()
-        + p9.guides(colour=p9.guide_legend(override_aes={"size": 3, "alpha": 1}))
+        + p9.scale_fill_manual(values=DATASET_COLOURS, labels=DATASET_LABELS, name="Dataset")
         + p9.facet_wrap("panel")
-        + p9.coord_flip()
+        # Clip the view to the observed jobs, without censoring what the densities were fitted on.
+        + p9.coord_flip(ylim=(per_job["cpu_hours"].min(), per_job["cpu_hours"].max()))
         + p9.labs(x="Analysis stage", y="per job", title="a")
-        + theme_mag()
+        + theme_mag(height=STAGE_FIGURE_HEIGHT)
     )
 
     jobs_rows = labelled.select(
@@ -466,7 +486,6 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
         | panel("Assemblers", ASSEMBLERS, metric_names[1], row_label="", show_strip=True, legend=False)
         | panel("Assemblers", ASSEMBLERS, metric_names[2], row_label="", show_strip=True, legend=False)
     )
-    # Only the bottom row carries the unit, as the outermost axis of the figure.
     bottom = (
         panel(
             "Binners",
@@ -551,12 +570,10 @@ def _scaling(
             + _log_y()
             + p9.facet_wrap("tool", nrow=1, scales="free_x" if free_x else "fixed")
             + _dataset_scale()
-            # Only the bottom row carries the x axis title, as the outermost axis of the figure.
             + p9.labs(x="" if top else x_label, y=metric)
             + theme_mag(height=6)
         )
         if top:
-            # Tool names label the columns once, on the top row.
             return plot + p9.theme(legend_position="none")
         return plot + p9.theme(strip_background=p9.element_blank(), strip_text=p9.element_blank())
 
