@@ -14,8 +14,11 @@ from .stages import ASSEMBLERS, BINNERS, GRANULARITY_ORDER, STAGE_ORDER
 MIN_N_FOR_BOX = 8
 MAX_JITTER_POINTS_PER_GROUP = 500
 JITTER_SEED = 0
-STAGE_JITTER_SIZE = 0.9
+STAGE_JITTER_SIZE = 2
 STAGE_JITTER_ALPHA = 0.35
+#: For the sparser panels, where points overlap far less.
+JITTER_ALPHA = 0.65
+POINT_SIZE = 2
 
 
 @dataclass(repr=False)
@@ -87,7 +90,7 @@ class _WeightedBeside(Beside):
         return figure
 
 
-DATASET_COLOURS = {"maghini": "#1F78B4", "zymo": "#E8A33D"}
+DATASET_COLOURS = {"maghini": "#16877E", "zymo": "#EF8478"}
 DATASET_LABELS = {
     "maghini": "maghini (human gut, 10 samples)",
     "zymo": "zymo (fecal reference, 1 sample)",
@@ -117,12 +120,14 @@ def _labels(*columns: str) -> dict[str, str]:
 #: Shared dimensions and typography.
 FIGURE_WIDTH = 13
 BASE_SIZE = 11
+#: Shrinks the canvas, so that text reads larger once the figure is scaled to the page width.
+FIGURE_SCALE = 0.85
 
 
 def theme_mag(height: float = 7) -> p9.theme:
     """Return the shared figure theme."""
     return p9.theme_bw(base_size=BASE_SIZE) + p9.theme(
-        figure_size=(FIGURE_WIDTH, height),
+        figure_size=(FIGURE_WIDTH * FIGURE_SCALE, height * FIGURE_SCALE),
         legend_position="bottom",
         panel_grid_minor=p9.element_blank(),
         panel_grid_major_y=p9.element_line(colour="#E6E6E6", size=0.4),
@@ -133,8 +138,8 @@ def theme_mag(height: float = 7) -> p9.theme:
         plot_title=p9.element_text(weight="bold", size=BASE_SIZE + 3, ha="left"),
         plot_subtitle=p9.element_text(size=BASE_SIZE, colour="#4D4D4D", ha="left"),
         plot_caption=p9.element_text(size=BASE_SIZE - 2, colour="#4D4D4D", ha="right"),
-        # Prevent long categorical labels from shifting titles off-canvas.
-        plot_title_position="plot",
+        # Panel labels line up with their panel, not with the axis labels to its left.
+        plot_title_position="panel",
         plot_caption_position="plot",
         legend_key=p9.element_blank(),
         legend_title=p9.element_text(weight="bold"),
@@ -213,7 +218,9 @@ JOBS_PANEL = "Jobs launched"
 TOTAL_PANEL = "Total core-hours"
 
 
-def _summary_bar_panel(rows: pl.DataFrame, stages: list[str], panel_label: str, labels) -> p9.ggplot:
+def _summary_bar_panel(
+    rows: pl.DataFrame, stages: list[str], panel_label: str, labels, tag: str
+) -> p9.ggplot:
     """Plot one pooled summary bar per stage."""
     summary = rows.with_columns(
         panel=pl.lit(panel_label),
@@ -252,7 +259,7 @@ def _summary_bar_panel(rows: pl.DataFrame, stages: list[str], panel_label: str, 
         + p9.scale_y_log10(labels=labels, expand=(0.02, 0, 0.25, 0))
         + p9.facet_wrap("panel")
         + p9.coord_flip()
-        + p9.labs(x="", y="per sample")
+        + p9.labs(x="", y="per sample", title=tag)
         # The last composed plot sets the final canvas size.
         + theme_mag()
         + p9.theme(axis_text_y=p9.element_blank(), axis_ticks_major_y=p9.element_blank())
@@ -295,6 +302,7 @@ def fig_stage_compute(budget: pl.DataFrame, trace: pl.DataFrame):
             mapping=p9.aes(colour="dataset"),
             size=STAGE_JITTER_SIZE,
             alpha=STAGE_JITTER_ALPHA,
+            stroke=0,
             width=0.2,
             height=0,
             random_state=JITTER_SEED,
@@ -305,7 +313,7 @@ def fig_stage_compute(budget: pl.DataFrame, trace: pl.DataFrame):
         + p9.guides(colour=p9.guide_legend(override_aes={"size": 3, "alpha": 1}))
         + p9.facet_wrap("panel")
         + p9.coord_flip()
-        + p9.labs(x="Analysis stage", y="per job")
+        + p9.labs(x="Analysis stage", y="per job", title="a")
         + theme_mag()
     )
 
@@ -326,10 +334,10 @@ def fig_stage_compute(budget: pl.DataFrame, trace: pl.DataFrame):
     return _WeightedBeside(
         [
             left,
-            _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels),
-            _summary_bar_panel(total_rows, stages, TOTAL_PANEL, si_labels),
+            _summary_bar_panel(jobs_rows, stages, JOBS_PANEL, si_labels, tag="b"),
+            _summary_bar_panel(total_rows, stages, TOTAL_PANEL, si_labels, tag="c"),
         ],
-        width_ratios=(4, 1, 1),
+        width_ratios=(4, 1.3, 1.3),
     )
 
 
@@ -345,7 +353,7 @@ def fig_storage(storage: pl.DataFrame, storage_budget: pl.DataFrame):
     stages = [label_of[s] for s in reversed(STAGE_ORDER) if s in present]
     big = _big_groups(long, ["stage_label", "metric"])
 
-    def distribution(metric_label: str, *, show_axis: bool) -> p9.ggplot:
+    def distribution(metric_label: str, tag: str, *, show_axis: bool) -> p9.ggplot:
         data = long.filter(pl.col("metric") == metric_label)
         jitter = _sample_for_jitter(data, ["stage_label"])
         plot = (
@@ -362,7 +370,8 @@ def fig_storage(storage: pl.DataFrame, storage_budget: pl.DataFrame):
                 data=jitter,
                 mapping=p9.aes(colour="dataset"),
                 size=STAGE_JITTER_SIZE,
-                alpha=STAGE_JITTER_ALPHA,
+                alpha=JITTER_ALPHA,
+                stroke=0,
                 width=0.18,
                 height=0,
                 random_state=JITTER_SEED,
@@ -372,7 +381,7 @@ def fig_storage(storage: pl.DataFrame, storage_budget: pl.DataFrame):
             + p9.facet_wrap("metric")
             + _dataset_scale()
             + p9.coord_flip()
-            + p9.labs(x="Analysis stage" if show_axis else "", y="per sample")
+            + p9.labs(x="Analysis stage" if show_axis else "", y="per sample", title=tag)
             + theme_mag()
         )
         if not show_axis:
@@ -381,8 +390,8 @@ def fig_storage(storage: pl.DataFrame, storage_budget: pl.DataFrame):
             )
         return plot
 
-    return distribution("Bytes written", show_axis=True) | distribution(
-        "Left on disk (work directory)", show_axis=False
+    return distribution("Bytes written", "a", show_axis=True) | distribution(
+        "Left on disk (work directory)", "b", show_axis=False
     )
 
 
@@ -423,8 +432,9 @@ def fig_tool_footprint(tasks: pl.DataFrame) -> p9.ggplot:
             + p9.geom_jitter(
                 data=jitter,
                 mapping=p9.aes(colour="dataset"),
-                size=1.5,
-                alpha=0.75,
+                size=POINT_SIZE,
+                alpha=JITTER_ALPHA,
+                stroke=0,
                 width=0.18,
                 height=0,
                 random_state=JITTER_SEED,
@@ -503,63 +513,74 @@ def _scaling(
     tools: list[str],
     x_col: str,
     x_label: str,
-    scales: str,
-) -> p9.ggplot:
-    """Plot resource use against tool input size."""
+    free_x: bool,
+):
+    """Plot resource use against tool input size, one metric per row."""
+    metrics = _labels("peak_rss_gb", "cpu_hours")
     long = to_long(
         tasks_with_stats.filter(pl.col("tool").is_in(tools)),
-        _labels("peak_rss_gb", "cpu_hours"),
+        metrics,
         ["dataset", "tool", x_col],
     )
-    correlations = _panel_correlations(long, x_col, free_x=scales == "free")
+    correlations = _panel_correlations(long, x_col, free_x=free_x)
 
-    return (
-        p9.ggplot(long, p9.aes(x_col, "value", colour="dataset"))
-        + p9.geom_point(size=1.6, alpha=0.8)
-        + p9.geom_text(
-            data=correlations,
-            mapping=p9.aes(x_col, "y", label="label"),
-            ha="left",
-            va="top",
-            size=BASE_SIZE - 1,
-            colour="#4D4D4D",
-            inherit_aes=False,
+    def row(metric: str, *, top: bool) -> p9.ggplot:
+        """Plot one metric across tools, as a row of panels sharing a y axis."""
+        plot = (
+            p9.ggplot(long.filter(pl.col("metric") == metric), p9.aes(x_col, "value", colour="dataset"))
+            + p9.geom_point(size=POINT_SIZE, alpha=0.8, stroke=0)
+            + p9.geom_text(
+                data=correlations.filter(pl.col("metric") == metric),
+                mapping=p9.aes(x_col, "y", label="label"),
+                ha="left",
+                va="top",
+                size=BASE_SIZE - 1,
+                colour="#4D4D4D",
+                inherit_aes=False,
+            )
+            + p9.geom_smooth(
+                mapping=p9.aes(x_col, "value"),
+                method="lm",
+                colour="#4D4D4D",
+                fill="#CCCCCC",
+                size=0.6,
+                alpha=0.3,
+                inherit_aes=False,
+            )
+            + p9.scale_x_log10(labels=si_labels)
+            + _log_y()
+            + p9.facet_wrap("tool", nrow=1, scales="free_x" if free_x else "fixed")
+            + _dataset_scale()
+            # Only the bottom row carries the x axis title, as the outermost axis of the figure.
+            + p9.labs(x="" if top else x_label, y=metric)
+            + theme_mag(height=6)
         )
-        + p9.geom_smooth(
-            mapping=p9.aes(x_col, "value"),
-            method="lm",
-            colour="#4D4D4D",
-            fill="#CCCCCC",
-            size=0.6,
-            alpha=0.3,
-            inherit_aes=False,
-        )
-        + p9.scale_x_log10(labels=si_labels)
-        + _log_y()
-        + p9.facet_grid("metric ~ tool", scales=scales)
-        + _dataset_scale()
-        + p9.labs(x=x_label, y="")
-        + theme_mag(height=6)
-    )
+        if top:
+            # Tool names label the columns once, on the top row.
+            return plot + p9.theme(legend_position="none")
+        return plot + p9.theme(strip_background=p9.element_blank(), strip_text=p9.element_blank())
+
+    metric_names = list(metrics.values())
+    return row(metric_names[0], top=True) / row(metric_names[1], top=False)
 
 
-def fig_scaling_assemblers(tasks_with_stats: pl.DataFrame) -> p9.ggplot:
+def fig_scaling_assemblers(tasks_with_stats: pl.DataFrame):
     return _scaling(
         tasks_with_stats,
         ASSEMBLERS,
         x_col="input_gbp",
         x_label="Sequencing input (Gbp)",
-        scales="free",
+        free_x=True,
     )
 
 
-def fig_scaling_binners(tasks_with_stats: pl.DataFrame) -> p9.ggplot:
+def fig_scaling_binners(tasks_with_stats: pl.DataFrame):
     return _scaling(
         tasks_with_stats,
         BINNERS,
         x_col="assembly_length",
         x_label="Assembly size (bp)",
-        scales="free_y",
+        free_x=False,
     )
 
 
@@ -607,7 +628,7 @@ def fig_top_processes(trace: pl.DataFrame, top_n: int = 15):
         .to_list()
     )
 
-    def panel(column: str, scale, *, first: bool = False, legend: bool = False) -> p9.ggplot:
+    def panel(column: str, scale, tag: str, *, first: bool = False, legend: bool = False) -> p9.ggplot:
         """Plot one resource panel."""
         plot = (
             p9.ggplot(
@@ -620,7 +641,7 @@ def fig_top_processes(trace: pl.DataFrame, top_n: int = 15):
             + p9.scale_fill_manual(values=GRANULARITY_COLOURS, name="This step runs", drop=False)
             + p9.facet_wrap("metric", nrow=1)
             + p9.coord_flip()
-            + p9.labs(x="", y="per job")
+            + p9.labs(x="", y="per job", title=tag)
             + theme_mag(height=6.5)
         )
         if not first:
@@ -632,7 +653,7 @@ def fig_top_processes(trace: pl.DataFrame, top_n: int = 15):
         return plot
 
     return (
-        panel("realtime_h", _log_y(), first=True)
-        | panel("peak_rss_gb", _log_y(), legend=True)
-        | panel("workdir_gb", p9.scale_y_continuous(labels=si_labels))
+        panel("realtime_h", _log_y(), "a", first=True)
+        | panel("peak_rss_gb", _log_y(), "b", legend=True)
+        | panel("workdir_gb", p9.scale_y_continuous(labels=si_labels), "c")
     )

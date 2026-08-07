@@ -53,17 +53,18 @@ def build_all(data_dir: str | Path = "data") -> dict[str, object]:
 
 
 def save_all(
-    figs: dict[str, object], out_dir: str | Path = "figures", format: str = "png", dpi: int = 300
+    figs: dict[str, object], out_dir: str | Path = "figures", formats: list[str] = ["png"], dpi: int = 300
 ) -> list[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for name, plot in figs.items():
-        path = out_dir / f"{name}.{format}"
-        started = time.perf_counter()
-        plot.save(path, dpi=dpi, verbose=False)
-        print(f"{path}  ({time.perf_counter() - started:.1f}s)", flush=True)
-        written.append(path)
+        for format in formats:
+            path = out_dir / f"{name}.{format}"
+            started = time.perf_counter()
+            plot.save(path, dpi=dpi, verbose=False)
+            print(f"{path}  ({time.perf_counter() - started:.1f}s)", flush=True)
+            written.append(path)
     return written
 
 
